@@ -18,7 +18,8 @@ charset-normalizer==3.4.4
 click==8.3.1
 cryptography==46.0.5
 distro==1.9.0
-dnspython==2.8.0
+dnspython==2.8.0 
+python-bidi==0.4.2
 ecdsa==0.19.1
 email-validator==2.3.0 
 sqlmodel
@@ -125,7 +126,7 @@ tzdata==2025.3
 tzlocal==5.3.1
 uritemplate==4.2.0
 urllib3==2.6.3
-uvicorn==0.25.0
+uvicorn[standard]
 watchfiles==1.1.1
 websockets==16.0
 yarl==1.23.0
