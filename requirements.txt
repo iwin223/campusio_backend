@@ -30,7 +30,7 @@ flake8==7.3.0
 frozenlist==1.8.0
 fsspec==2026.2.0
 google-ai-generativelanguage==0.6.15
-google-api-core==2.30.0
+google-api-core
 google-api-python-client==2.191.0
 google-auth==2.49.0.dev0
 google-auth-httplib2==0.3.0
@@ -78,7 +78,7 @@ platformdirs==4.9.2
 pluggy==1.6.0
 propcache==0.4.1
 proto-plus==1.27.1
-protobuf==5.29.6
+protobuf
 psycopg2-binary==2.9.11
 pyasn1==0.6.2
 pyasn1_modules==0.4.2
