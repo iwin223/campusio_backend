@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Timetable - {{ class_name or teacher_name }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.4;
+            color: #333;
+            background: white;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            border-bottom: 3px solid #1e40af;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .school-name {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1e40af;
+            margin-bottom: 5px;
+        }
+
+        .timetable-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            margin-top: 10px;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        /* Timetable Grid */
+        .timetable-grid {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+            font-size: 12px;
+        }
+
+        .timetable-grid th,
+        .timetable-grid td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+            vertical-align: top;
+        }
+
+        .timetable-grid th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .time-col {
+            width: 120px;
+            font-weight: bold;
+        }
+
+        .day-col {
+            width: 150px; /* Fixed width instead of calc */
+        }
+
+        /* Period styling */
+        .period-info {
+            margin-bottom: 4px;
+        }
+
+        .period-name {
+            font-weight: bold;
+            display: block;
+        }
+
+        .time-range {
+            font-size: 10px;
+            color: #666;
+        }
+
+        /* Entry styling */
+        .entry-content {
+            background-color: #e3f2fd;
+            border-radius: 4px;
+            padding: 6px;
+            margin: 2px 0;
+            min-height: 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .subject-name {
+            font-weight: bold;
+            color: #1565c0;
+            display: block;
+            font-size: 11px;
+        }
+
+        .teacher-name {
+            color: #666;
+            display: block;
+            font-size: 10px;
+            margin-top: 2px;
+        }
+
+        .class-name {
+            color: #666;
+            display: block;
+            font-size: 10px;
+            margin-top: 2px;
+        }
+
+        .room {
+            color: #333;
+            display: block;
+            font-size: 10px;
+            font-weight: bold;
+            margin-top: 2px;
+        }
+
+        /* Break periods */
+        .break-cell {
+            background-color: #fff3cd;
+            font-style: italic;
+            color: #856404;
+        }
+
+        /* Empty cells */
+        .empty-cell {
+            background-color: #f8f9fa;
+            color: #999;
+            font-style: italic;
+        }
+
+        /* Footer */
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            font-size: 10px;
+            color: #666;
+        }
+
+        /* Print optimizations */
+        @media print {
+            body {
+                padding: 0;
+            }
+
+            .container {
+                padding: 20px;
+            }
+
+            .timetable-grid {
+                font-size: 10px;
+            }
+
+            .entry-content {
+                padding: 4px;
+                min-height: 30px;
+            }
+        }
+
+        /* Period type colors */
+        .period-type-lesson { background-color: #e8f5e8; }
+        .period-type-break { background-color: #fff3cd; }
+        .period-type-assembly { background-color: #e3f2fd; }
+        .period-type-lunch { background-color: #fce4ec; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="school-name">School ERP System</div>
+            <div class="timetable-title">
+                {% if class_name %}
+                    Class Timetable - {{ class_name }}
+                {% else %}
+                    Teacher Schedule - {{ teacher_name }}
+                {% endif %}
+            </div>
+            <div class="subtitle">
+                Academic Term: {{ academic_term_id|replace('_', ' ')|title }} |
+                Generated: {{ generated_at }}
+            </div>
+        </div>
+
+        <!-- Timetable Grid -->
+        <table class="timetable-grid">
+            <thead>
+                <tr>
+                    <th class="time-col">Time</th>
+                    {% for day in days_order %}
+                    <th class="day-col">{{ day_labels[day] }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for period in periods %}
+                <tr>
+                    <td class="time-col">
+                        <div class="period-info">
+                            <span class="period-name">{{ period.name }}</span>
+                            <span class="time-range">{{ period.start_time }} - {{ period.end_time }}</span>
+                        </div>
+                    </td>
+                    {% for day in days_order %}
+                    <td class="day-col period-type-{{ period.period_type }}">
+                        {% set entries = schedule[day] | selectattr('period_id', 'equalto', period.id) | list %}
+                        {% if entries %}
+                            {% for entry in entries %}
+                            <div class="entry-content">
+                                <span class="subject-name">{{ entry.subject_name }}</span>
+                                {% if teacher_name %}
+                                    <span class="class-name">{{ entry.class_name }}</span>
+                                {% else %}
+                                    <span class="teacher-name">{{ entry.teacher_name }}</span>
+                                {% endif %}
+                                {% if entry.room %}
+                                <span class="room">Room {{ entry.room }}</span>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        {% elif period.period_type != 'lesson' %}
+                            <div class="break-cell">{{ period.name }}</div>
+                        {% else %}
+                            <div class="empty-cell">-</div>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>This timetable is generated electronically and is valid for the current academic term.</p>
+            <p>For any changes or updates, please contact the school administration.</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Report Card - {{ student_name }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: white;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+        }
+        
+        /* Header */
+        .header {
+            text-align: center;
+            border-bottom: 3px solid #1e40af;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .school-name {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1e40af;
+            margin-bottom: 5px;
+        }
+        
+        .report-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            margin-top: 10px;
+        }
+        
+        .report-date {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        /* Student Info Section */
+        .student-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+        }
+        
+        .info-row {
+            display: table;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        
+        .info-item {
+            display: table-cell;
+            width: 25%;
+            padding: 5px;
+        }
+        
+        .info-label {
+            font-size: 11px;
+            font-weight: bold;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+        
+        .info-value {
+            font-size: 13px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        /* Section Title */
+        .section-title {
+            font-size: 14px;
+            font-weight: bold;
+            color: white;
+            background: #1e40af;
+            padding: 10px 15px;
+            margin-bottom: 15px;
+            margin-top: 20px;
+        }
+        
+        /* Grades Table */
+        .grades-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            font-size: 11px;
+        }
+        
+        .grades-table thead {
+            background: #e8eef7;
+        }
+        
+        .grades-table th {
+            padding: 8px;
+            text-align: left;
+            font-weight: bold;
+            color: #333;
+            border-bottom: 2px solid #1e40af;
+            border-top: 1px solid #ddd;
+        }
+        
+        .grades-table td {
+            padding: 8px;
+            font-size: 11px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .grade-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-weight: bold;
+            color: white;
+            font-size: 11px;
+            text-align: center;
+            min-width: 28px;
+        }
+        
+        .grade-1 { background: #059669; }
+        .grade-2 { background: #10b981; }
+        .grade-3 { background: #34d399; }
+        .grade-4 { background: #fbbf24; color: #333; }
+        .grade-5 { background: #f59e0b; color: #333; }
+        .grade-6 { background: #f97316; }
+        .grade-7 { background: #ef4444; }
+        .grade-8 { background: #dc2626; }
+        .grade-9 { background: #991b1b; }
+        
+        /* Subject Summary */
+        .subject-summary {
+            display: table;
+            width: 100%;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border: 1px solid #e8eef7;
+            border-left: 4px solid #1e40af;
+        }
+        
+        .summary-item {
+            display: table-cell;
+            width: 25%;
+            padding: 5px;
+            font-size: 12px;
+        }
+        
+        .summary-label {
+            font-weight: bold;
+            color: #666;
+            font-size: 11px;
+        }
+        
+        .summary-value {
+            font-size: 13px;
+            font-weight: bold;
+            color: #1e40af;
+        }
+        
+        /* Overall Performance */
+        .overall-section {
+            background: #1e40af;
+            color: white;
+            padding: 25px;
+            margin-bottom: 30px;
+            text-align: center;
+            border: 1px solid #1e40af;
+        }
+        
+        .overall-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+        
+        .overall-grade {
+            display: inline-block;
+            font-size: 48px;
+            font-weight: bold;
+            width: 70px;
+            height: 70px;
+            line-height: 70px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            margin: 10px auto;
+        }
+        
+        .overall-percentage {
+            font-size: 28px;
+            font-weight: bold;
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .overall-description {
+            font-size: 14px;
+        }
+        
+        /* Remarks Section */
+        .remarks-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+        }
+        
+        .remarks-title {
+            font-size: 12px;
+            font-weight: bold;
+            color: #1e40af;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        
+        .remarks-text {
+            font-size: 12px;
+            color: #333;
+            line-height: 1.5;
+            min-height: 40px;
+        }
+        
+        /* Footer */
+        .footer {
+            border-top: 2px solid #ddd;
+            padding-top: 15px;
+            margin-top: 30px;
+            display: table;
+            width: 100%;
+            font-size: 11px;
+        }
+        
+        .signature-line {
+            display: table-cell;
+            text-align: center;
+            width: 33%;
+            padding: 10px;
+        }
+        
+        .signature-space {
+            height: 50px;
+            border-bottom: 1px solid #333;
+            margin-bottom: 5px;
+        }
+        
+        .signature-title {
+            font-weight: bold;
+            color: #333;
+        }
+        
+        /* Attendance Info */
+        .attendance-banner {
+            background: #eff6ff;
+            border-left: 4px solid #3b82f6;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 12px;
+            border: 1px solid #dbeafe;
+        }
+        
+        .attendance-item {
+            display: inline-block;
+            margin-right: 20px;
+        }
+        
+        .attendance-label {
+            color: #666;
+            margin-right: 5px;
+        }
+        
+        .attendance-value {
+            font-weight: bold;
+            color: #333;
+        }
+        
+        /* Empty State */
+        .empty-state {
+            padding: 20px;
+            text-align: center;
+            color: #999;
+            font-style: italic;
+        }
+
+        /* Subject header */
+        .subject-header {
+            display: table;
+            width: 100%;
+            background: #64748b;
+            color: white;
+            padding: 8px 12px;
+            margin-bottom: 10px;
+            margin-top: 15px;
+        }
+
+        .subject-header-name {
+            display: table-cell;
+            width: 70%;
+            font-weight: bold;
+            font-size: 12px;
+        }
+
+        .subject-header-grade {
+            display: table-cell;
+            width: 30%;
+            text-align: right;
+            font-weight: bold;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="school-name">{{ school_name }}</div>
+            <div class="report-title">ACADEMIC REPORT CARD</div>
+            <div class="report-date">Academic Term: {{ academic_term }} | Generated: {{ generated_date }}</div>
+        </div>
+        
+        <!-- Student Information -->
+        <div class="student-section">
+            <div class="info-row">
+                <div class="info-item">
+                    <div class="info-label">Student Name</div>
+                    <div class="info-value">{{ student_name }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Student ID</div>
+                    <div class="info-value">{{ student_id }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Class</div>
+                    <div class="info-value">{{ class_name }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Academic Term</div>
+                    <div class="info-value">{{ academic_term }}</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Attendance Info -->
+        <div class="attendance-banner">
+            <span class="attendance-item">
+                <span class="attendance-label">Attendance Rate:</span>
+                <span class="attendance-value">{{ attendance_percentage }}%</span>
+            </span>
+            <span class="attendance-item">
+                <span class="attendance-label">Class Size:</span>
+                <span class="attendance-value">{{ class_size }} students</span>
+            </span>
+            {% if position %}
+            <span class="attendance-item">
+                <span class="attendance-label">Position:</span>
+                <span class="attendance-value">{{ position }}/{{ class_size }}</span>
+            </span>
+            {% endif %}
+        </div>
+        
+        <!-- Overall Performance -->
+        <div class="overall-section">
+            <div class="overall-label">Overall Academic Performance</div>
+            <div class="overall-grade">{{ overall_grade }}</div>
+            <div class="overall-percentage">{{ overall_average }}%</div>
+            <div class="overall-description">{{ overall_description }}</div>
+        </div>
+        
+        <!-- Grades by Subject -->
+        {% if subjects %}
+        <div class="grades-section">
+            <div class="section-title">GRADES BY SUBJECT</div>
+            
+            {% for subject in subjects %}
+            <div style="margin-bottom: 25px;">
+                <div class="subject-header">
+                    <div class="subject-header-name">{{ subject.subject_name }}</div>
+                    <div class="subject-header-grade">
+                        Grade: <span class="grade-badge grade-{{ subject.average_grade }}">{{ subject.average_grade }}</span>
+                        ({{ subject.average_percentage }}%)
+                    </div>
+                </div>
+                
+                {% if subject.grades %}
+                <table class="grades-table">
+                    <thead>
+                        <tr>
+                            <th>Assessment Type</th>
+                            <th>Score</th>
+                            <th>Max Score</th>
+                            <th>%</th>
+                            <th>Grade</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for grade in subject.grades %}
+                        <tr>
+                            <td>{{ grade.assessment_type.replace('_', ' ').title() }}</td>
+                            <td>{{ grade.score }}</td>
+                            <td>{{ grade.max_score }}</td>
+                            <td>{{ grade.percentage }}%</td>
+                            <td><span class="grade-badge grade-{{ grade.grade }}">{{ grade.grade }}</span></td>
+                            <td>{{ grade.date_display }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="empty-state">No grades recorded for this subject in this term.</div>
+                {% endif %}
+                
+                <div class="subject-summary">
+                    <div class="summary-item">
+                        <span class="summary-label">Average Score:</span>
+                        <span class="summary-value">{{ subject.average_percentage }}%</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Grade:</span>
+                        <span class="summary-value">{{ subject.average_grade }}</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Assessments:</span>
+                        <span class="summary-value">{{ subject.grades|length }}</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Total:</span>
+                        <span class="summary-value">{{ subject.total_score }}/{{ subject.total_max }}</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">No grades recorded for this student in this term.</div>
+        {% endif %}
+        
+        <!-- Remarks -->
+        <div class="remarks-section">
+            <div class="remarks-title">Class Teacher's Remarks</div>
+            <div class="remarks-text">{{ class_teacher_remarks or 'No remarks recorded.' }}</div>
+        </div>
+        
+        <div class="remarks-section">
+            <div class="remarks-title">Head Teacher's Remarks</div>
+            <div class="remarks-text">{{ head_teacher_remarks or 'No remarks recorded.' }}</div>
+        </div>
+        
+        <!-- Footer with Signatures -->
+        <div class="footer">
+            <div class="signature-line">
+                <div class="signature-space"></div>
+                <div class="signature-title">Class Teacher</div>
+            </div>
+            <div class="signature-line">
+                <div class="signature-space"></div>
+                <div class="signature-title">Head Teacher</div>
+            </div>
+            <div class="signature-line">
+                <div class="signature-space"></div>
+                <div class="signature-title">School Principal</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,6 @@
+staff_id,first_name,last_name,other_names,email,phone,date_of_birth,gender,staff_type,position,department,qualification,date_joined,address,photo_url
+STF001,Alice,Thompson,,alice.thompson@school.edu.gh,+233501234567,1985-04-15,female,teaching,Mathematics Teacher,Mathematics,MSc Mathematics,2015-09-01,Accra,Ghana,
+STF002,Bob,Wilson,,bob.wilson@school.edu.gh,+233507654321,1982-08-20,male,teaching,English Teacher,English,BA English,2018-09-01,Tema,Ghana,
+STF003,Carol,Davis,,carol.davis@school.edu.gh,+233509876543,1978-12-10,female,admin,School Principal,Administration,MEd Education,2010-01-15,Accra,Ghana,
+STF004,Daniel,Garcia,,daniel.garcia@school.edu.gh,+233502468135,1990-06-25,male,non_teaching,IT Administrator,IT,BSc Computer Science,2020-03-01,Takoradi,Ghana,
+STF005,Eva,Martinez,,eva.martinez@school.edu.gh,+233508642975,1988-09-30,female,teaching,Science Teacher,Science,MSc Biology,2019-09-01,Cape Coast,Ghana,
