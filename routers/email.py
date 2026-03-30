@@ -137,11 +137,12 @@ async def test_email_service(
     from config import get_settings
     settings = get_settings()
     
-    is_configured = bool(settings.elastic_email_api_key)
+    is_configured = bool(settings.resend_api_key)
     
     return {
         "configured": is_configured,
-        "from_email": settings.elastic_email_from_email,
-        "from_name": settings.elastic_email_from_name,
+        "provider": "resend",
+        "from_email": settings.resend_from_email,
+        "from_name": settings.resend_from_name,
         "status": "ready" if is_configured else "not_configured"
     }

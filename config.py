@@ -14,10 +14,10 @@ class Settings(BaseSettings):
     algorithm: str 
     access_token_expire_minutes: int
     
-    # Elastic Email
-    elastic_email_api_key: str 
-    elastic_email_from_email: str 
-    elastic_email_from_name: str 
+    # Resend Email
+    resend_api_key: str 
+    resend_from_email: str 
+    resend_from_name: str 
     
     # CORS
     cors_origins: list[str]    

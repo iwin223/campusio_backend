@@ -1,4 +1,4 @@
-"""Email Service using Elastic Email API"""
+"""Email Service using Resend API"""
 import httpx
 import logging
 from typing import List, Dict, Optional
@@ -8,19 +8,19 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 class EmailService:
-    """Elastic Email Service for sending transactional emails"""
+    """Resend Email Service for sending transactional emails"""
     
-    BASE_URL = "https://api.elasticemail.com/v4"
+    BASE_URL = "https://api.resend.com"
     
     def __init__(self):
-        self.api_key = settings.elastic_email_api_key
-        self.from_email = settings.elastic_email_from_email
-        self.from_name = settings.elastic_email_from_name
+        self.api_key = settings.resend_api_key
+        self.from_email = settings.resend_from_email
+        self.from_name = settings.resend_from_name
         
     def _get_headers(self) -> Dict:
         """Get request headers with API key"""
         return {
-            "X-ElasticEmail-ApiKey": self.api_key,
+            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
     
@@ -43,43 +43,29 @@ class EmailService:
             reply_to: Reply-to email address (optional)
         
         Returns:
-            Response from Elastic Email API
+            Response from Resend API
         """
         if not self.api_key:
-            logger.warning("Elastic Email API key not configured - email not sent")
+            logger.warning("Resend API key not configured - email not sent")
             return {"success": False, "error": "Email service not configured"}
         
         try:
-            recipients = [{"Email": email} for email in to]
-            
-            body = [
-                {
-                    "ContentType": "HTML",
-                    "Content": html_body,
-                    "Charset": "utf-8"
-                }
-            ]
+            payload = {
+                "from": f"{self.from_name} <{self.from_email}>",
+                "to": to,
+                "subject": subject,
+                "html": html_body,
+            }
             
             if text_body:
-                body.append({
-                    "ContentType": "PlainText",
-                    "Content": text_body,
-                    "Charset": "utf-8"
-                })
+                payload["text"] = text_body
             
-            payload = {
-                "Recipients": recipients,
-                "Content": {
-                    "Body": body,
-                    "From": f"{self.from_name} <{self.from_email}>",
-                    "ReplyTo": reply_to or self.from_email,
-                    "Subject": subject
-                }
-            }
+            if reply_to:
+                payload["reply_to"] = reply_to
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.BASE_URL}/emails/transactional",
+                    f"{self.BASE_URL}/emails",
                     json=payload,
                     headers=self._get_headers(),
                     timeout=30.0
@@ -88,7 +74,7 @@ class EmailService:
                 if response.status_code == 200:
                     data = response.json()
                     logger.info(f"Email sent successfully to {len(to)} recipient(s)")
-                    return {"success": True, "message_id": data.get("MessageID")}
+                    return {"success": True, "message_id": data.get("id")}
                 else:
                     error_msg = response.text
                     logger.error(f"Failed to send email: {error_msg}")
@@ -97,6 +83,7 @@ class EmailService:
         except Exception as e:
             logger.error(f"Error sending email: {str(e)}")
             return {"success": False, "error": str(e)}
+
     
     async def send_announcement_email(
         self,
