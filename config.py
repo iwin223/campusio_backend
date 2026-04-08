@@ -1,6 +1,7 @@
 """Application configuration loaded from environment variables"""
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -19,8 +20,8 @@ class Settings(BaseSettings):
     resend_from_email: str 
     resend_from_name: str 
     
-    # USMS SMS Service
-    usms_token: str
+    # USMS SMS Service (optional - can fail gracefully if not configured)
+    usms_token: Optional[str] = None
     usms_sender_id: str = "SchoolERP"
     usms_base_url: str = "https://webapp.usmsgh.com"
     
