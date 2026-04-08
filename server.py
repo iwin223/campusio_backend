@@ -36,6 +36,8 @@ from routers.finance.coa import router as coa_router
 from routers.finance.journal import router as journal_router
 from routers.finance.expenses import router as expenses_router
 from routers.finance.reports import router as reports_router
+from routers.finance_reports import router as finance_reports_router
+from routers.payments import router as payments_router
 from routers.teacher.grades import router as teacher_grades_router
 from routers.teacher.attendance import router as teacher_attendance_router
 from routers.teacher.timetable import router as teacher_timetable_router
@@ -106,6 +108,8 @@ app.include_router(coa_router, prefix="/api")
 app.include_router(journal_router, prefix="/api")
 app.include_router(expenses_router, prefix="/api")
 app.include_router(reports_router, prefix="/api")
+app.include_router(finance_reports_router)
+app.include_router(payments_router, prefix="/api")
 app.include_router(teacher_grades_router, prefix="/api")
 app.include_router(teacher_attendance_router, prefix="/api")
 app.include_router(teacher_timetable_router, prefix="/api")

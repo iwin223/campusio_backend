@@ -33,6 +33,7 @@ from models.payroll import PayrollContract, PayrollRun, PayrollLineItem, Payroll
 from models.finance.chart_of_accounts import GLAccount
 from models.finance.journal_entries import JournalEntry, JournalLineItem
 from models.finance.expenses import Expense
+from models.payment import OnlineTransaction, PaymentVerification
 
 # set target metadata for 'autogenerate' support
 target_metadata = SQLModel.metadata
