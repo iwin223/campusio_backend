@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_
 from sqlmodel import select
+from pydantic import BaseModel
 
 from database import get_session
 from auth import get_current_user
@@ -13,7 +14,6 @@ from models.user import User
 from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification
 from models.fee import Fee, PaymentStatus as FeeStatus
 from models.student import Student
-from models.parent import Parent
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/finance", tags=["Finance Reports"])
 # RESPONSE MODELS
 # ============================================================================
 
-class PaymentSummary:
+class PaymentSummary(BaseModel):
     """Summary of a payment"""
     transaction_id: str
     reference: str
@@ -40,7 +40,7 @@ class PaymentSummary:
     verified_at: Optional[datetime] = None
 
 
-class PaymentStatistics:
+class PaymentStatistics(BaseModel):
     """Payment statistics for dashboard"""
     total_transactions: int
     successful_payments: int
@@ -52,7 +52,7 @@ class PaymentStatistics:
     period_end: datetime
 
 
-class ParentPaymentHistory:
+class ParentPaymentHistory(BaseModel):
     """Payment history for a specific parent"""
     parent_id: str
     parent_name: str
@@ -144,9 +144,9 @@ async def get_payments(
             OnlineTransaction.id,
             OnlineTransaction.reference,
             Student.name,
-            Parent.first_name,
-            Parent.email,
-            Parent.phone,
+            User.first_name,
+            User.email,
+            User.phone,
             Fee.fee_type,
             OnlineTransaction.amount,
             OnlineTransaction.status,
@@ -158,7 +158,7 @@ async def get_payments(
         ).join(
             Student, OnlineTransaction.student_id == Student.id
         ).join(
-            Parent, OnlineTransaction.parent_id == Parent.id
+            User, OnlineTransaction.parent_id == User.id
         ).where(
             OnlineTransaction.school_id == school_id
         )
@@ -181,8 +181,8 @@ async def get_payments(
             query = query.where(
                 or_(
                     Student.name.ilike(search_pattern),
-                    Parent.first_name.ilike(search_pattern),
-                    Parent.email.ilike(search_pattern)
+                    User.first_name.ilike(search_pattern),
+                    User.email.ilike(search_pattern)
                 )
             )
         
@@ -345,11 +345,11 @@ async def get_payments_by_parent(
     try:
         # Get unique parents with their payment summaries
         parent_query = select(
-            Parent.id,
-            Parent.first_name,
-            Parent.email
+            User.id,
+            User.first_name,
+            User.email
         ).join(
-            OnlineTransaction, Parent.id == OnlineTransaction.parent_id
+            OnlineTransaction, User.id == OnlineTransaction.parent_id
         ).where(
             OnlineTransaction.school_id == school_id
         ).distinct().offset(skip).limit(limit)
@@ -592,7 +592,7 @@ async def get_payment_detail(
         student = await session.exec(student_query)
         student = student.first()
         
-        parent_query = select(Parent).where(Parent.id == transaction.parent_id)
+        parent_query = select(User).where(User.id == transaction.parent_id)
         parent = await session.exec(parent_query)
         parent = parent.first()
         
