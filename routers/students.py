@@ -484,6 +484,8 @@ async def get_student_parents(
 
             parent_payload.append({
                 "id": p.id,
+                "parent_id": p.id,
+                "user_id": p.user_id,  # Add user_id for messaging
                 "first_name": p.first_name,
                 "last_name": p.last_name,
                 "relationship": p.relationship,

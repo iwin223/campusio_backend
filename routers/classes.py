@@ -193,6 +193,45 @@ async def get_class(
     }
 
 
+@router.get("/{class_id}/students", response_model=dict)
+async def get_class_students(
+    class_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get all students in a specific class"""
+    # Verify class exists
+    class_result = await session.execute(select(Class).where(Class.id == class_id))
+    cls = class_result.scalar_one_or_none()
+    
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+    
+    if current_user.role != UserRole.SUPER_ADMIN and current_user.school_id != cls.school_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get students in this class
+    student_result = await session.execute(
+        select(Student).where(Student.class_id == class_id)
+    )
+    students = student_result.scalars().all()
+    
+    return {
+        "items": [
+            {
+                "id": s.id,
+                "student_id": s.student_id,
+                "first_name": s.first_name,
+                "last_name": s.last_name,
+                "photo_url": s.photo_url,
+                "status": s.status
+            }
+            for s in students
+        ],
+        "total": len(students)
+    }
+
+
 @router.put("/{class_id}", response_model=dict)
 async def update_class(
     class_id: str,

@@ -22,6 +22,16 @@ class AnnouncementAudience(str, Enum):
     SPECIFIC_CLASS = "specific_class"
 
 
+class MessageType(str, Enum):
+    """Message context type for filtering and categorization"""
+    GENERAL = "general"
+    GRADE = "grade"
+    ATTENDANCE = "attendance"
+    BEHAVIOR = "behavior"
+    FEE = "fee"
+    URGENT = "urgent"
+
+
 class Announcement(SQLModel, table=True):
     __tablename__ = "announcements"
     
@@ -61,7 +71,11 @@ class Message(SQLModel, table=True):
     subject: str
     content: str
     is_read: bool = False
-    parent_message_id: Optional[str] = Field(default=None, index=True)
+    read_at: Optional[datetime] = None  # When message was read
+    parent_message_id: Optional[str] = Field(default=None, index=True)  # For threading
+    student_id: Optional[str] = Field(default=None, index=True)  # Which student conversation is about
+    class_id: Optional[str] = Field(default=None, index=True)  # Which class context
+    message_type: MessageType = MessageType.GENERAL  # Type of message for filtering
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -70,6 +84,9 @@ class MessageCreate(SQLModel):
     subject: str
     content: str
     parent_message_id: Optional[str] = None
+    student_id: Optional[str] = None
+    class_id: Optional[str] = None
+    message_type: MessageType = MessageType.GENERAL
 
 
 class EmailNotification(SQLModel, table=True):
@@ -85,3 +102,50 @@ class EmailNotification(SQLModel, table=True):
     error_message: Optional[str] = None
     sent_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SMSNotification(SQLModel, table=True):
+    """Track SMS notifications sent"""
+    __tablename__ = "sms_notifications"
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    school_id: str = Field(index=True)
+    recipient_phone: str = Field(index=True)
+    recipient_name: Optional[str] = None
+    message: str
+    notification_type: str  # "fee_reminder", "attendance", "announcement", "grade", "general"
+    status: str = "pending"  # pending, sent, failed, delivered
+    message_id: Optional[str] = None  # ID from USMS API
+    error_message: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SendSMSRequest(SQLModel):
+    """Request schema for sending SMS"""
+    phone_numbers: list[str]
+    message: str
+    message_type: str = "text"
+
+
+class SendFeeSMSRequest(SQLModel):
+    """Request schema for fee reminder SMS"""
+    student_id: str
+    amount_due: float
+    due_date: str
+
+
+class SendAttendanceSMSRequest(SQLModel):
+    """Request schema for attendance notification SMS"""
+    student_id: str
+    phone_number: str
+    attendance_percentage: float
+
+
+class SendAnnouncementSMSRequest(SQLModel):
+    """Request schema for announcement SMS"""
+    announcement_id: str
+    phone_numbers: list[str]
+    title: str
+    snippet: str

@@ -428,6 +428,81 @@ async def get_teacher_timetable(
     }
 
 
+@router.get("/my-schedule", response_model=dict)
+async def get_my_timetable(
+    academic_term_id: str = "term_1_2026",
+    current_user: User = Depends(require_roles(UserRole.TEACHER)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get weekly timetable for current teacher"""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+    
+    # Get periods
+    periods_result = await session.execute(
+        select(Period).where(
+            Period.school_id == school_id,
+            Period.is_active == True
+        ).order_by(Period.period_number)
+    )
+    periods = {p.id: p for p in periods_result.scalars().all()}
+    
+    # Get timetable entries for current teacher
+    result = await session.execute(
+        select(Timetable).where(
+            Timetable.teacher_id == current_user.id,
+            Timetable.academic_term_id == academic_term_id
+        )
+    )
+    entries = result.scalars().all()
+    
+    # Get subjects and classes
+    subject_ids = list(set(e.subject_id for e in entries))
+    class_ids = list(set(e.class_id for e in entries))
+    
+    subjects = {}
+    if subject_ids:
+        subject_result = await session.execute(select(Subject).where(Subject.id.in_(subject_ids)))
+        subjects = {s.id: s for s in subject_result.scalars().all()}
+    
+    classes = {}
+    if class_ids:
+        class_result = await session.execute(select(Class).where(Class.id.in_(class_ids)))
+        classes = {c.id: c for c in class_result.scalars().all()}
+    
+    # Build schedule organized by day
+    timetable = {day.value: [] for day in DayOfWeek}
+    
+    for entry in entries:
+        period = periods.get(entry.period_id)
+        subject = subjects.get(entry.subject_id)
+        cls = classes.get(entry.class_id)
+        
+        timetable[entry.day_of_week.value].append({
+            "id": entry.id,
+            "period_id": entry.period_id,
+            "period_name": period.name if period else "Unknown",
+            "period_number": period.period_number if period else 0,
+            "start_time": period.start_time if period else "",
+            "end_time": period.end_time if period else "",
+            "subject_id": entry.subject_id,
+            "subject_name": subject.name if subject else "Unknown",
+            "class_id": entry.class_id,
+            "class_name": cls.name if cls else "Unknown",
+            "room": entry.room
+        })
+    
+    # Sort each day by period number
+    for day in timetable:
+        timetable[day].sort(key=lambda x: x["period_number"])
+    
+    return {
+        "timetable": timetable,
+        "message": "success" if timetable else "No classes assigned"
+    }
+
+
 @router.post("/bulk", response_model=dict)
 async def create_bulk_timetable_entries(
     entries: List[TimetableCreate],

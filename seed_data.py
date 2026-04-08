@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from sqlmodel import select
 from database import async_engine, async_session, init_db
 from models.user import User, UserRole
+from models.otp import OTPSettings
 from models.school import School
 from models.classroom import Class as Classroom
 from models.student import Student
@@ -56,6 +57,16 @@ async def seed_data():
             school_id=None
         )
         session.add(super_admin)
+        await session.flush()
+        
+        # Create OTP settings for super admin (mandatory OTP)
+        super_admin_otp = OTPSettings(
+            user_id=super_admin.id,
+            is_enabled=True,
+            is_mandatory=True,
+            method="sms"
+        )
+        session.add(super_admin_otp)
         
         # Create school admin user
         school_admin = User(
@@ -68,6 +79,16 @@ async def seed_data():
             school_id=school.id
         )
         session.add(school_admin)
+        await session.flush()
+        
+        # Create OTP settings for school admin (mandatory OTP)
+        school_admin_otp = OTPSettings(
+            user_id=school_admin.id,
+            is_enabled=True,
+            is_mandatory=True,
+            method="sms"
+        )
+        session.add(school_admin_otp)
         
         # Create teacher user
         teacher = User(
@@ -80,6 +101,16 @@ async def seed_data():
             school_id=school.id
         )
         session.add(teacher)
+        await session.flush()
+        
+        # Create OTP settings for teacher (optional OTP, disabled by default)
+        teacher_otp = OTPSettings(
+            user_id=teacher.id,
+            is_enabled=False,
+            is_mandatory=False,
+            method="sms"
+        )
+        session.add(teacher_otp)
         
         # Create some classes
         classes_data = [
@@ -115,6 +146,15 @@ async def seed_data():
         session.add(student_user)
         await session.flush()
         
+        # Create OTP settings for student (optional OTP, disabled by default)
+        student_otp = OTPSettings(
+            user_id=student_user.id,
+            is_enabled=False,
+            is_mandatory=False,
+            method="sms"
+        )
+        session.add(student_otp)
+        
         # Create student record linked to user
         student = Student(
             school_id=school.id,
@@ -144,6 +184,16 @@ async def seed_data():
             school_id=school.id
         )
         session.add(parent_user)
+        await session.flush()
+        
+        # Create OTP settings for parent (optional OTP, disabled by default)
+        parent_otp = OTPSettings(
+            user_id=parent_user.id,
+            is_enabled=False,
+            is_mandatory=False,
+            method="sms"
+        )
+        session.add(parent_otp)
         
         await session.flush()
         

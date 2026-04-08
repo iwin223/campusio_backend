@@ -43,7 +43,7 @@ class CSVImportService:
                 Class.level == level
             )
         )
-        cls = result.scalar_one_or_none() 
+        cls = result.scalars().first()
         if cls:
             return cls.id
      except ValueError:
@@ -96,8 +96,8 @@ class CSVImportService:
             # Read CSV
             df = pd.read_csv(io.BytesIO(csv_content))
 
-            # Validate required columns
-            required_columns = ['student_id', 'first_name', 'last_name','other_names', 'date_of_birth', 'gender', 'admission_date','class','address','nationality','religion','blood_group','medical_conditions','photo_url']
+            # Validate required columns (must be present in CSV)
+            required_columns = ['student_id', 'first_name', 'last_name', 'date_of_birth', 'gender', 'admission_date']
             missing_columns = [col for col in required_columns if col not in df.columns]
             if missing_columns:
                 return {
@@ -106,6 +106,9 @@ class CSVImportService:
                     'errors': self.errors,
                     'success_count': 0
                 }
+
+            # Optional columns that may exist
+            optional_columns = ['other_names', 'class', 'address', 'nationality', 'religion', 'blood_group', 'medical_conditions', 'photo_url']
 
             # Process each row
             for index, row in df.iterrows():
@@ -117,7 +120,7 @@ class CSVImportService:
                             Student.student_id == str(row['student_id']).strip()
                         )
                     )
-                    if result.scalar_one_or_none():
+                    if result.scalars().first():
                         self.errors.append(f"Row {index + 2}: Student ID '{row['student_id']}' already exists")
                         continue
 
@@ -206,7 +209,7 @@ class CSVImportService:
                             Staff.staff_id == str(row['staff_id']).strip()
                         )
                     )
-                    if result.scalar_one_or_none():
+                    if result.scalars().first():
                         self.errors.append(f"Row {index + 2}: Staff ID '{row['staff_id']}' already exists")
                         continue
 
@@ -217,7 +220,7 @@ class CSVImportService:
                             Staff.email == str(row['email']).strip().lower()
                         )
                     )
-                    if result.scalar_one_or_none():
+                    if result.scalars().first():
                         self.errors.append(f"Row {index + 2}: Email '{row['email']}' already exists")
                         continue
 

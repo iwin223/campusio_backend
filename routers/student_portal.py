@@ -4,6 +4,8 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
 from typing import List, Optional
+import json
+import uuid
 from models.user import User, UserRole
 from models.student import Student
 from models.grade import Grade
@@ -13,8 +15,12 @@ from models.classroom import Class, Subject
 from models.timetable import Timetable, Period, DayOfWeek
 from models.communication import Announcement
 from models.staff import Staff
+from models.assignment import Assignment, Submission, SubmissionStatus, AssignmentStatus, AssignmentQuestion
+from models.hostel import StudentHostel, HostelFee
+from models.transport import StudentTransport, TransportFee, Route
 from database import get_session
 from auth import get_current_user, require_roles
+from services.auto_grader import AutoGrader
 
 router = APIRouter(prefix="/student-portal", tags=["Student Portal"])
 
@@ -88,10 +94,11 @@ async def get_my_profile(
 
 @router.get("/dashboard", response_model=dict)
 async def get_student_dashboard(
+    term_id: Optional[str] = None,
     current_user: User = Depends(require_roles(UserRole.STUDENT)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get student dashboard overview"""
+    """Get student dashboard overview, optionally filtered by academic term"""
     student = await get_student_record(current_user, session)
     
     # Get class info
@@ -103,12 +110,16 @@ async def get_student_dashboard(
     
     # Get attendance stats (last 30 days)
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-    attendance_result = await session.execute(
-        select(Attendance).where(
-            Attendance.student_id == student.id,
-            Attendance.created_at >= thirty_days_ago
-        )
+    attendance_query = select(Attendance).where(
+        Attendance.student_id == student.id,
+        Attendance.created_at >= thirty_days_ago
     )
+    
+    # Filter by term if provided
+    if term_id:
+        attendance_query = attendance_query.where(Attendance.academic_term_id == term_id)
+    
+    attendance_result = await session.execute(attendance_query)
     attendance_records = attendance_result.scalars().all()
     
     present_count = sum(1 for a in attendance_records if a.status == AttendanceStatus.PRESENT)
@@ -116,9 +127,13 @@ async def get_student_dashboard(
     attendance_rate = round((present_count / total_days * 100) if total_days > 0 else 0, 1)
     
     # Get grades stats
-    grades_result = await session.execute(
-        select(Grade).where(Grade.student_id == student.id)
-    )
+    grades_query = select(Grade).where(Grade.student_id == student.id)
+    
+    # Filter by term if provided
+    if term_id:
+        grades_query = grades_query.where(Grade.academic_term_id == term_id)
+    
+    grades_result = await session.execute(grades_query)
     grades = grades_result.scalars().all()
     
     total_score = sum(g.score for g in grades)
@@ -127,9 +142,13 @@ async def get_student_dashboard(
     overall_grade = get_letter_grade(overall_avg)
     
     # Get fee balance
-    fee_result = await session.execute(
-        select(Fee).where(Fee.student_id == student.id)
-    )
+    fee_query = select(Fee).where(Fee.student_id == student.id)
+    
+    # Filter by term if provided
+    if term_id:
+        fee_query = fee_query.where(Fee.academic_term_id == term_id)
+    
+    fee_result = await session.execute(fee_query)
     fees = fee_result.scalars().all()
     total_due = sum(f.amount_due for f in fees)
     total_paid = sum(f.amount_paid for f in fees)
@@ -193,16 +212,21 @@ async def get_student_dashboard(
 
 @router.get("/grades", response_model=dict)
 async def get_my_grades(
+    term_id: Optional[str] = None,
     current_user: User = Depends(require_roles(UserRole.STUDENT)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get student's own grades"""
+    """Get student's own grades, optionally filtered by academic term"""
     student = await get_student_record(current_user, session)
     
-    # Get all grades
-    grades_result = await session.execute(
-        select(Grade).where(Grade.student_id == student.id)
-    )
+    # Build query to get grades
+    query = select(Grade).where(Grade.student_id == student.id)
+    
+    # Filter by term if provided
+    if term_id:
+        query = query.where(Grade.academic_term_id == term_id)
+    
+    grades_result = await session.execute(query)
     grades = grades_result.scalars().all()
     
     # Get subjects
@@ -283,20 +307,26 @@ async def get_my_grades(
 @router.get("/attendance", response_model=dict)
 async def get_my_attendance(
     days: int = 30,
+    term_id: Optional[str] = None,
     current_user: User = Depends(require_roles(UserRole.STUDENT)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get student's own attendance history"""
+    """Get student's own attendance history, optionally filtered by academic term"""
     student = await get_student_record(current_user, session)
     
-    # Get attendance records
-    start_date = datetime.utcnow() - timedelta(days=days)
-    attendance_result = await session.execute(
-        select(Attendance).where(
-            Attendance.student_id == student.id,
-            Attendance.created_at >= start_date
-        ).order_by(Attendance.attendance_date.desc())
+    # Build query for attendance
+    query = select(Attendance).where(
+        Attendance.student_id == student.id,
+        Attendance.created_at >= datetime.utcnow() - timedelta(days=days)
     )
+    
+    # Filter by term if provided
+    if term_id:
+        query = query.where(Attendance.academic_term_id == term_id)
+    
+    query = query.order_by(Attendance.attendance_date.desc())
+    
+    attendance_result = await session.execute(query)
     records = attendance_result.scalars().all()
     
     # Calculate summary
@@ -430,16 +460,21 @@ async def get_my_timetable(
 
 @router.get("/fees", response_model=dict)
 async def get_my_fees(
+    term_id: Optional[str] = None,
     current_user: User = Depends(require_roles(UserRole.STUDENT)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get student's fee details"""
+    """Get student's fee details, optionally filtered by academic term"""
     student = await get_student_record(current_user, session)
     
-    # Get fees
-    fee_result = await session.execute(
-        select(Fee).where(Fee.student_id == student.id)
-    )
+    # Build query for fees
+    query = select(Fee).where(Fee.student_id == student.id)
+    
+    # Filter by term if provided
+    if term_id:
+        query = query.where(Fee.academic_term_id == term_id)
+    
+    fee_result = await session.execute(query)
     fees = fee_result.scalars().all()
     
     # Get fee structures
@@ -520,3 +555,575 @@ async def get_student_announcements(
         }
         for a in announcements
     ]
+
+
+# ============================================================================
+# ASSIGNMENTS ENDPOINTS
+# ============================================================================
+
+@router.get("/assignments/my-assignments", response_model=dict)
+async def get_my_assignments(
+    term_id: Optional[str] = None,
+    current_user: User = Depends(require_roles(UserRole.STUDENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get all assignments for the current student, optionally filtered by academic term"""
+    student = await get_student_record(current_user, session)
+    
+    if not student.class_id:
+        return {"assignments": [], "message": "No class assigned"}
+    
+    # Build query for assignments
+    query = select(Assignment).where(
+        Assignment.school_id == student.school_id,
+        Assignment.class_id == student.class_id,
+        Assignment.status == AssignmentStatus.PUBLISHED
+    )
+    
+    # Filter by term if provided
+    if term_id:
+        query = query.where(Assignment.academic_term_id == term_id)
+    
+    query = query.order_by(Assignment.due_date)
+    
+    assignments_result = await session.execute(query)
+    assignments = assignments_result.scalars().all()
+    
+    # Get student's submissions for these assignments
+    submissions = {}
+    if assignments:
+        assignment_ids = [a.id for a in assignments]
+        submissions_result = await session.execute(
+            select(Submission).where(
+                Submission.student_id == student.id,
+                Submission.assignment_id.in_(assignment_ids)
+            )
+        )
+        for sub in submissions_result.scalars().all():
+            submissions[sub.assignment_id] = sub
+    
+    # Get teacher and subject info
+    teacher_info = {}
+    subject_info = {}
+    
+    assignment_list = []
+    for assignment in assignments:
+        # Get teacher name
+        if assignment.teacher_id not in teacher_info:
+            teacher_result = await session.execute(
+                select(Staff).where(Staff.id == assignment.teacher_id)
+            )
+            staff = teacher_result.scalar_one_or_none()
+            teacher_info[assignment.teacher_id] = f"{staff.first_name} {staff.last_name}" if staff else "Unknown"
+        
+        # Get subject name
+        if assignment.subject_id not in subject_info:
+            subject_result = await session.execute(
+                select(Subject).where(Subject.id == assignment.subject_id)
+            )
+            subject = subject_result.scalar_one_or_none()
+            subject_info[assignment.subject_id] = subject.name if subject else "Unknown"
+        
+        # Get questions for this assignment
+        questions_result = await session.execute(
+            select(AssignmentQuestion).where(AssignmentQuestion.assignment_id == assignment.id)
+        )
+        questions = questions_result.scalars().all()
+        
+# Format questions for response
+        formatted_questions = []
+        for q in questions:
+            question_data = {
+                "id": q.id,
+                "question": q.question_text,
+                "type": q.question_type,
+                "answer": q.correct_answer,
+                "points": q.points,
+            }
+            
+            # Parse options if they exist
+            if q.options:
+                try:
+                    if isinstance(q.options, str):
+                        parsed = json.loads(q.options)
+                    else:
+                        parsed = q.options
+                    
+                    # For matching questions, split key=value pairs into options and items
+                    if q.question_type == "matching":
+                        options = []
+                        items = []
+                        for pair in parsed:
+                            if "=" in str(pair):
+                                key, value = str(pair).split("=", 1)
+                                options.append(key)
+                                items.append(value)
+                            else:
+                                options.append(pair)
+                        question_data["options"] = options
+                        question_data["items"] = items
+                    else:
+                        question_data["options"] = parsed
+                        question_data["items"] = []  # Non-matching questions don't have items
+                except:
+                    question_data["options"] = []
+                    question_data["items"] = []
+            else:
+                question_data["options"] = []
+                question_data["items"] = []
+            
+            formatted_questions.append(question_data)
+        
+        submission = submissions.get(assignment.id)
+        
+        assignment_list.append({
+            "id": assignment.id,
+            "title": assignment.title,
+            "description": assignment.description,
+            "subject_name": subject_info[assignment.subject_id],
+            "teacher_name": teacher_info[assignment.teacher_id],
+            "assignment_type": assignment.assignment_type,
+            "due_date": assignment.due_date.isoformat() if assignment.due_date else None,
+            "created_at": assignment.created_date.isoformat() if assignment.created_date else None,
+            "submitted_at": submission.submission_date.isoformat() if submission and submission.submission_date else None,
+            "graded": submission.status == SubmissionStatus.GRADED if submission else False,
+            "score": submission.score if submission else None,
+            "max_score": submission.max_score if submission else assignment.points_possible,
+            "percentage": round((submission.score / (submission.max_score or assignment.points_possible)) * 100, 1) if submission and submission.score else None,
+            "feedback": submission.feedback if submission else None,
+            "graded_at": submission.graded_date.isoformat() if submission and submission.graded_date else None,
+            "points_possible": assignment.points_possible,
+            "questions": formatted_questions
+        })
+    
+    return {
+        "assignments": assignment_list,
+        "message": f"Found {len(assignment_list)} assignments"
+    }
+
+
+@router.get("/assignments/{assignment_id}", response_model=dict)
+async def get_assignment_detail(
+    assignment_id: str,
+    current_user: User = Depends(require_roles(UserRole.STUDENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get full assignment details with questions for a student"""
+    student = await get_student_record(current_user, session)
+    
+    # Get assignment
+    assignment_result = await session.execute(
+        select(Assignment).where(
+            Assignment.id == assignment_id,
+            Assignment.school_id == student.school_id,
+            Assignment.class_id == student.class_id,
+            Assignment.status == AssignmentStatus.PUBLISHED
+        )
+    )
+    assignment = assignment_result.scalar_one_or_none()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found or not accessible")
+    
+    # Get questions
+    questions_result = await session.execute(
+        select(AssignmentQuestion).where(AssignmentQuestion.assignment_id == assignment_id)
+    )
+    questions = questions_result.scalars().all()
+    
+    # Format questions for response
+    formatted_questions = []
+    for q in questions:
+        question_data = {
+            "id": q.id,
+            "question": q.question_text,
+            "type": q.question_type,
+            "answer": q.correct_answer,
+            "points": q.points,
+        }
+        
+        # Parse options if they exist
+        if q.options:
+            try:
+                if isinstance(q.options, str):
+                    parsed = json.loads(q.options)
+                else:
+                    parsed = q.options
+                
+                # For matching questions, split key=value pairs into options and items
+                if q.question_type == "matching":
+                    options = []
+                    items = []
+                    for pair in parsed:
+                        if "=" in str(pair):
+                            key, value = str(pair).split("=", 1)
+                            options.append(key)
+                            items.append(value)
+                        else:
+                            options.append(pair)
+                    question_data["options"] = options
+                    question_data["items"] = items
+                else:
+                    question_data["options"] = parsed
+                    question_data["items"] = []  # Non-matching questions don't have items
+            except:
+                question_data["options"] = []
+                question_data["items"] = []
+        else:
+            question_data["options"] = []
+            question_data["items"] = []
+        
+        formatted_questions.append(question_data)
+    
+    # Get teacher name
+    teacher_result = await session.execute(
+        select(Staff).where(Staff.id == assignment.teacher_id)
+    )
+    staff = teacher_result.scalar_one_or_none()
+    teacher_name = f"{staff.first_name} {staff.last_name}" if staff else "Unknown"
+    
+    # Get subject name
+    subject_result = await session.execute(
+        select(Subject).where(Subject.id == assignment.subject_id)
+    )
+    subject = subject_result.scalar_one_or_none()
+    subject_name = subject.name if subject else "Unknown"
+    
+    # Get student's submission if exists
+    submission_result = await session.execute(
+        select(Submission).where(
+            Submission.assignment_id == assignment_id,
+            Submission.student_id == student.id
+        )
+    )
+    submission = submission_result.scalar_one_or_none()
+    
+    return {
+        "assignment": {
+            "id": assignment.id,
+            "class_id": assignment.class_id,
+            "subject_id": assignment.subject_id,
+            "teacher_id": assignment.teacher_id,
+            "title": assignment.title,
+            "description": assignment.description,
+            "due_date": assignment.due_date.isoformat() if assignment.due_date else None,
+            "points_possible": assignment.points_possible,
+            "total_points": assignment.points_possible,
+            "instructions": assignment.instructions,
+            "assignment_type": assignment.assignment_type,
+            "status": assignment.status,
+            "created_at": assignment.created_date.isoformat() if assignment.created_date else None,
+            "teacher_name": teacher_name,
+            "subject_name": subject_name,
+            "questions": formatted_questions,
+        },
+        "submission": {
+            "submitted_at": submission.submission_date.isoformat() if submission and submission.submission_date else None,
+            "status": submission.status if submission else None,
+            "score": submission.score if submission else None,
+        } if submission else None,
+        "message": "Assignment details retrieved successfully"
+    }
+
+
+@router.post("/assignments/{assignment_id}/submit", response_model=dict)
+async def submit_assignment(
+    assignment_id: str,
+    submission_text: Optional[str] = None,
+    answers: Optional[dict] = None,
+    current_user: User = Depends(require_roles(UserRole.STUDENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Submit an assignment with either text/file or quiz answers.
+    
+    Args:
+        submission_text: Text submission or answers JSON string
+        answers: Dict of {question_id: answer} for quiz submissions
+    """
+    student = await get_student_record(current_user, session)
+    
+    # Get assignment
+    assignment_result = await session.execute(
+        select(Assignment).where(Assignment.id == assignment_id)
+    )
+    assignment = assignment_result.scalar_one_or_none()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    # Verify student has access to this assignment
+    if assignment.class_id != student.class_id or assignment.school_id != student.school_id:
+        raise HTTPException(status_code=403, detail="You do not have access to this assignment")
+    
+    # Check if assignment is already graded - prevent resubmission
+    existing_submission_result = await session.execute(
+        select(Submission).where(
+            Submission.assignment_id == assignment_id,
+            Submission.student_id == student.id
+        )
+    )
+    existing_submission = existing_submission_result.scalar_one_or_none()
+    
+    if existing_submission and existing_submission.status == SubmissionStatus.GRADED:
+        raise HTTPException(
+            status_code=400, 
+            detail="This assignment has already been graded and cannot be submitted again"
+        )
+    
+    # Prepare submission data
+    answers_json = None
+    auto_grade_data = None
+    
+    # If answers provided, store as JSON and attempt auto-grading
+    if answers:
+        answers_json = json.dumps(answers)
+        
+        # Get assignment questions for grading
+        questions_result = await session.execute(
+            select(AssignmentQuestion).where(
+                AssignmentQuestion.assignment_id == assignment_id
+            )
+        )
+        questions = questions_result.scalars().all()
+        
+        # Auto-grade if configured
+        if assignment.rubric:
+            try:
+                rubric_settings = json.loads(assignment.rubric)
+                if rubric_settings.get("allow_auto_grade", False):
+                    auto_grader = AutoGrader()
+                    auto_grade_data = await auto_grader.auto_grade_submission(
+                        answers_json,
+                        questions,
+                        float(assignment.points_possible or 100)
+                    )
+            except:
+                pass  # Continue without auto-grading if it fails
+    
+    # Get or create submission
+    submission_result = await session.execute(
+        select(Submission).where(
+            Submission.assignment_id == assignment_id,
+            Submission.student_id == student.id
+        )
+    )
+    submission = submission_result.scalar_one_or_none()
+    
+    if not submission:
+        # Create new submission
+        submission = Submission(
+            id=str(uuid.uuid4()),
+            school_id=student.school_id,
+            assignment_id=assignment_id,
+            student_id=student.id,
+            class_id=student.class_id,
+            subject_id=assignment.subject_id,
+            status=SubmissionStatus.SUBMITTED,
+            submission_text=answers_json or submission_text,
+            submission_date=datetime.utcnow(),
+            max_score=assignment.points_possible
+        )
+        session.add(submission)
+    else:
+        # Update existing submission
+        submission.submission_text = answers_json or submission_text
+        submission.status = SubmissionStatus.SUBMITTED
+        submission.submission_date = datetime.utcnow()
+    
+    # If auto-graded, set the score
+    if auto_grade_data and auto_grade_data.get("can_full_auto_grade"):
+        submission.score = auto_grade_data["total_score"]
+        submission.status = SubmissionStatus.GRADED
+        submission.graded_date = datetime.utcnow()
+        # Store grading details in rubric_scores for reference
+        submission.rubric_scores = json.dumps({
+            "auto_graded": True,
+            "question_scores": auto_grade_data["question_scores"],
+            "feedback": auto_grade_data["feedback"]
+        })
+    
+    await session.commit()
+    await session.refresh(submission)
+    
+    response = {
+        "message": "Assignment submitted successfully",
+        "submission_id": submission.id,
+        "status": submission.status,
+        "submitted_at": submission.submission_date.isoformat() if submission.submission_date else None
+    }
+    
+    # Include auto-grading results if available
+    if auto_grade_data:
+        response["auto_graded"] = True
+        response["grading"] = {
+            "score": auto_grade_data["total_score"],
+            "max_score": auto_grade_data["max_score"],
+            "percentage": auto_grade_data["percentage"],
+            "feedback": auto_grade_data["feedback"],
+            "can_full_auto_grade": auto_grade_data["can_full_auto_grade"]
+        }
+    
+    return response
+
+# ============================================================================
+# OPTIONAL MODULES - ENROLLMENT STATUS ENDPOINTS
+# ============================================================================
+
+@router.get("/enrollment-status", response_model=dict)
+async def get_enrollment_status(
+    current_user: User = Depends(require_roles(UserRole.STUDENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Check which optional modules student is enrolled in"""
+    student = await get_student_record(current_user, session)
+    
+    # Check hostel enrollment
+    hostel_result = await session.execute(
+        select(StudentHostel).where(
+            StudentHostel.student_id == student.id,
+            StudentHostel.school_id == student.school_id,
+            StudentHostel.status == "active"
+        )
+    )
+    has_hostel = hostel_result.scalar_one_or_none() is not None
+    
+    # Check transport enrollment
+    transport_result = await session.execute(
+        select(StudentTransport).where(
+            StudentTransport.student_id == student.id,
+            StudentTransport.school_id == student.school_id,
+            StudentTransport.is_active == True
+        )
+    )
+    has_transport = transport_result.scalar_one_or_none() is not None
+    
+    return {
+        "has_hostel": has_hostel,
+        "has_transport": has_transport,
+        "enabled_modules": {
+            "hostel": has_hostel,
+            "transport": has_transport,
+            "fees": True,
+            "grades": True,
+            "attendance": True,
+            "assignments": True,
+            "timetable": True
+        }
+    }
+
+
+@router.get("/hostel/status", response_model=dict)
+async def get_hostel_status(
+    current_user: User = Depends(require_roles(UserRole.STUDENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get student's hostel info if enrolled"""
+    student = await get_student_record(current_user, session)
+    
+    hostel_result = await session.execute(
+        select(StudentHostel).where(
+            StudentHostel.student_id == student.id,
+            StudentHostel.school_id == student.school_id,
+            StudentHostel.status == "active"
+        )
+    )
+    hostel = hostel_result.scalar_one_or_none()
+    
+    if not hostel:
+        raise HTTPException(status_code=404, detail="Not enrolled in hostel")
+    
+    # Get recent fees for this hostel
+    fees_result = await session.execute(
+        select(HostelFee).where(
+            HostelFee.student_id == student.id,
+            HostelFee.school_id == student.school_id
+        ).order_by(HostelFee.created_at.desc()).limit(10)
+    )
+    fees = fees_result.scalars().all()
+    
+    return {
+        "enrolled": True,
+        "hostel_id": hostel.hostel_id,
+        "assigned_date": hostel.check_in_date,
+        "room_number": hostel.room_id or "TBA",
+        "academic_year": hostel.academic_year,
+        "parent_contact": hostel.parent_contact,
+        "emergency_contact": hostel.emergency_contact,
+        "emergency_contact_phone": hostel.emergency_contact_phone,
+        "recent_fees": [
+            {
+                "id": f.id,
+                "fee_type": f.fee_type,
+                "amount_due": f.amount_due,
+                "amount_paid": f.amount_paid,
+                "balance": f.amount_due - f.amount_paid - f.discount,
+                "is_paid": f.is_paid,
+                "due_date": f.due_date,
+                "payment_date": f.payment_date,
+                "payment_method": f.payment_method
+            }
+            for f in fees
+        ]
+    }
+
+
+@router.get("/transport/status", response_model=dict)
+async def get_transport_status(
+    current_user: User = Depends(require_roles(UserRole.STUDENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get student's transport info if enrolled"""
+    student = await get_student_record(current_user, session)
+    
+    transport_result = await session.execute(
+        select(StudentTransport).where(
+            StudentTransport.student_id == student.id,
+            StudentTransport.school_id == student.school_id,
+            StudentTransport.is_active == True
+        )
+    )
+    transport = transport_result.scalar_one_or_none()
+    
+    if not transport:
+        raise HTTPException(status_code=404, detail="Not enrolled in transport")
+    
+    # Get route details
+    route_result = await session.execute(
+        select(Route).where(Route.id == transport.route_id)
+    )
+    route = route_result.scalar_one_or_none()
+    
+    # Get fees for this route
+    fees_result = await session.execute(
+        select(TransportFee).where(
+            TransportFee.student_id == student.id,
+            TransportFee.school_id == student.school_id
+        ).order_by(TransportFee.created_at.desc()).limit(10)
+    )
+    fees = fees_result.scalars().all()
+    
+    return {
+        "enrolled": True,
+        "route_id": transport.route_id,
+        "route_name": route.route_name if route else "Unknown",
+        "pickup_point": transport.pickup_point or "N/A",
+        "dropoff_point": transport.dropoff_point or "N/A",
+        "enrollment_date": transport.enrollment_date,
+        "emergency_contact": transport.emergency_contact,
+        "emergency_contact_phone": transport.emergency_contact_phone,
+        "recent_fees": [
+            {
+                "id": f.id,
+                "fee_type": f.fee_type,
+                "amount_due": f.amount_due,
+                "amount_paid": f.amount_paid,
+                "balance": f.amount_due - f.amount_paid - f.discount,
+                "is_paid": f.is_paid,
+                "due_date": f.due_date,
+                "payment_date": f.payment_date,
+                "payment_method": f.payment_method
+            }
+            for f in fees
+        ]
+    }

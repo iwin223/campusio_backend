@@ -1,6 +1,6 @@
 student_id,first_name,last_name,other_names,date_of_birth,gender,admission_date,class,address,nationality,religion,blood_group,medical_conditions,photo_url
-STU006,John,Doe,Edem,2005-03-15,male,2023-09-01,Primary_1,123 Main St,Ghanaian,Christian,O+,None,
-STU007,Jane,Smith,Mary,2006-07-22,female,2023-09-01,Primary_1,456 Oak Ave,Ghanaian,Muslim,A-,Asthma,
-STU008,Michael,Johnson,David,2004-11-08,male,2022-09-01,Primary_2,789 Pine Rd,Ghanaian,Christian,B+,None,
-STU009,Sarah,Williams,Ann,2005-01-30,female,2023-09-01,Primary_2,321 Elm St,Ghanaian,Christian,AB-,None,
-STU0010,David,Brown,Michael,2006-05-12,male,2023-09-01,JHS_1,654 Maple Dr,Ghanaian,Christian,O-,None,
+STU006,John,Doe,Edem,2005-03-15,male,2023-09-01,primary_1,123 Main St,Ghanaian,Christian,O+,None,
+STU007,Jane,Smith,Mary,2006-07-22,female,2023-09-01,primary_1,456 Oak Ave,Ghanaian,Muslim,A-,Asthma,
+STU008,Michael,Johnson,David,2004-11-08,male,2022-09-01,primary_2,789 Pine Rd,Ghanaian,Christian,B+,None,
+STU009,Sarah,Williams,Ann,2005-01-30,female,2023-09-01,primary_2,321 Elm St,Ghanaian,Christian,AB-,None,
+STU0010,David,Brown,Michael,2006-05-12,male,2023-09-01,jhs_1,654 Maple Dr,Ghanaian,Christian,O-,None,

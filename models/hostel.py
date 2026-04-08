@@ -284,6 +284,7 @@ class HostelFee(SQLModel, table=True):
     student_id: str = Field(index=True)
     hostel_id: str = Field(index=True)
     academic_term_id: Optional[str] = Field(default=None, index=True)
+    fee_structure_id: Optional[str] = Field(default=None, index=True)
     
     fee_type: HostelFeeType
     amount_due: float
@@ -294,6 +295,10 @@ class HostelFee(SQLModel, table=True):
     payment_date: Optional[str] = None
     payment_method: Optional[str] = None
     receipt_number: Optional[str] = None
+    
+    # GL Posting
+    gl_journal_entry_id: Optional[str] = None
+    gl_posted_date: Optional[str] = None
     
     # Status tracking
     is_paid: bool = False
@@ -308,6 +313,7 @@ class HostelFeeCreate(SQLModel):
     student_id: str
     hostel_id: str
     academic_term_id: Optional[str] = None
+    fee_structure_id: Optional[str] = None
     fee_type: HostelFeeType
     amount_due: float
     discount: float = 0.0
@@ -323,7 +329,53 @@ class HostelFeeUpdate(SQLModel):
     payment_method: Optional[str] = None
     receipt_number: Optional[str] = None
     is_paid: Optional[bool] = None
+    gl_journal_entry_id: Optional[str] = None
+    gl_posted_date: Optional[str] = None
     notes: Optional[str] = None
+
+
+class HostelFeeStructure(SQLModel, table=True):
+    """Fee structure for hostel billing"""
+    __tablename__ = "hostel_fee_structures"
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    school_id: str = Field(index=True)
+    hostel_id: str = Field(index=True)
+    academic_term_id: Optional[str] = Field(default=None, index=True)
+    
+    fee_type: HostelFeeType  # MONTHLY, TERM, ANNUAL, SEMESTER
+    amount: float
+    description: Optional[str] = None
+    due_date: Optional[str] = None
+    
+    # GL Account mapping for auto-posting
+    gl_revenue_account_code: Optional[str] = None  # e.g., "4100" for hostel revenue
+    gl_receivable_account_code: Optional[str] = None  # e.g., "1200" for student receivables
+    
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class HostelFeeStructureCreate(SQLModel):
+    hostel_id: str
+    academic_term_id: Optional[str] = None
+    fee_type: HostelFeeType
+    amount: float
+    description: Optional[str] = None
+    due_date: Optional[str] = None
+    gl_revenue_account_code: Optional[str] = None
+    gl_receivable_account_code: Optional[str] = None
+    is_active: bool = True
+
+
+class HostelFeeStructureUpdate(SQLModel):
+    amount: Optional[float] = None
+    description: Optional[str] = None
+    due_date: Optional[str] = None
+    gl_revenue_account_code: Optional[str] = None
+    gl_receivable_account_code: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 class HostelMaintenance(SQLModel, table=True):

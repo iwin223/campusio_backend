@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from typing import Optional
 from models.attendance import Attendance, AttendanceCreate, AttendanceStatus, AttendanceBulkCreate
-from models.student import Student
+from models.student import Student, StudentParent, Parent
 from models.classroom import Class
 from models.user import User, UserRole
 from database import get_session
@@ -131,6 +131,25 @@ async def get_class_attendance(
     )
     attendance_records = {a.student_id: a for a in attendance_result.scalars().all()}
     
+    # Get parent information for all students
+    student_ids = [s.id for s in students]
+    student_parents_result = await session.execute(
+        select(StudentParent, Parent).where(
+            StudentParent.student_id.in_(student_ids),
+            StudentParent.parent_id == Parent.id
+        )
+    )
+    student_parents_data = student_parents_result.all()
+    
+    # Map student to parent info (using first parent as primary)
+    student_to_parent = {}
+    for sp, parent in student_parents_data:
+        if sp.student_id not in student_to_parent:
+            student_to_parent[sp.student_id] = {
+                "parent_name": f"{parent.first_name} {parent.last_name}",
+                "parent_phone": parent.phone
+            }
+    
     records = []
     present = 0
     absent = 0
@@ -150,13 +169,18 @@ async def get_class_attendance(
         elif status == AttendanceStatus.EXCUSED:
             excused += 1
         
+        # Get parent info
+        parent_info = student_to_parent.get(student.id, {})
+        
         records.append({
             "student_id": student.id,
             "student_name": f"{student.first_name} {student.last_name}",
             "photo_url": student.photo_url,
             "status": status,
             "remarks": att.remarks if att else None,
-            "recorded": att is not None
+            "recorded": att is not None,
+            "parent_name": parent_info.get("parent_name", "Unknown"),
+            "parent_phone": parent_info.get("parent_phone", "")
         })
     
     return {

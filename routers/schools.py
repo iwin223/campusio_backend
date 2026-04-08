@@ -45,6 +45,43 @@ async def create_school(
     }
 
 
+@router.get("/terms/list", response_model=dict)
+async def list_all_academic_terms(
+    academic_year: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """List academic terms for current user's school"""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+    
+    query = select(AcademicTerm).where(AcademicTerm.school_id == school_id)
+    
+    if academic_year:
+        query = query.where(AcademicTerm.academic_year == academic_year)
+    
+    query = query.order_by(AcademicTerm.start_date.desc())
+    
+    result = await session.execute(query)
+    terms = result.scalars().all()
+    
+    return {
+        "items": [
+            {
+                "id": t.id,
+                "school_id": t.school_id,
+                "academic_year": t.academic_year,
+                "term": t.term,
+                "start_date": t.start_date,
+                "end_date": t.end_date,
+                "is_current": t.is_current
+            }
+            for t in terms
+        ]
+    }
+
+
 @router.get("", response_model=list[dict])
 async def list_schools(
     is_active: Optional[bool] = None,

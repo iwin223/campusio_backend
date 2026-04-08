@@ -1,16 +1,24 @@
 """Fees router"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlmodel import select, func
+from sqlmodel import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from typing import Optional, List
 import uuid
+import logging
+
 from models.fee import Fee, FeeCreate, FeeStructure, FeeStructureCreate, FeePayment, FeePaymentCreate, PaymentStatus, PaymentMethod, FeeType
-from models.student import Student
+from models.student import Student, StudentParent, Parent
 from models.classroom import Class
 from models.user import User, UserRole
+from models.finance import (
+    JournalEntryCreate, JournalLineItemCreate, ReferenceType
+)
+from models.finance.chart_of_accounts import GLAccount
 from database import get_session
 from auth import get_current_user, require_roles
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/fees", tags=["Fees & Payments"])
 
@@ -125,6 +133,25 @@ async def get_outstanding_fees(
         )
         students = {s.id: s for s in students_result.scalars().all()}
         
+        # Get parent information - join StudentParent with Parent properly
+        from sqlalchemy import join
+        student_parents_result = await session.execute(
+            select(StudentParent, Parent).where(
+                StudentParent.student_id.in_(student_ids),
+                StudentParent.parent_id == Parent.id
+            )
+        )
+        student_parents_data = student_parents_result.all()
+        
+        # Map student to parent info (using first parent as primary)
+        student_to_parent = {}
+        for sp, parent in student_parents_data:
+            if sp.student_id not in student_to_parent:
+                student_to_parent[sp.student_id] = {
+                    "parent_name": f"{parent.first_name} {parent.last_name}",
+                    "parent_phone": parent.phone
+                }
+        
         # Filter by class if specified
         for sid, data in student_balances.items():
             student = students.get(sid)
@@ -134,6 +161,10 @@ async def get_outstanding_fees(
                 data["student_name"] = f"{student.first_name} {student.last_name}"
                 data["student_number"] = student.student_id
                 data["class_id"] = student.class_id
+                # Add parent info
+                parent_info = student_to_parent.get(sid, {})
+                data["parent_name"] = parent_info.get("parent_name", "Unknown")
+                data["parent_phone"] = parent_info.get("parent_phone", "")
     
     outstanding_list = sorted(
         [v for v in student_balances.values() if "student_name" in v],
@@ -344,10 +375,33 @@ async def record_payment(
     fee.updated_at = datetime.utcnow()
     session.add(fee)
     
+    # Get FeeStructure to determine fee type for GL account mapping
+    fee_structure_result = await session.execute(
+        select(FeeStructure).where(FeeStructure.id == fee.fee_structure_id)
+    )
+    fee_structure = fee_structure_result.scalar_one_or_none()
+    
+    # Create GL journal entry for fee payment
+    journal_entry_id = None
+    try:
+        if fee_structure:
+            journal_entry_id = await _create_fee_journal_entry(
+                session=session,
+                school_id=school_id,
+                payment=payment,
+                fee=fee,
+                fee_structure=fee_structure,
+                amount=payment_data.amount,
+            )
+            logger.info(f"Created journal entry {journal_entry_id} for fee payment {payment.id}")
+    except Exception as e:
+        logger.error(f"Error creating journal entry for fee payment: {str(e)}")
+        # Continue with payment recording even if GL posting fails
+    
     await session.commit()
     await session.refresh(payment)
     
-    return {
+    response = {
         "id": payment.id,
         "receipt_number": receipt_number,
         "amount": payment.amount,
@@ -355,6 +409,11 @@ async def record_payment(
         "fee_status": fee.status,
         "message": "Payment recorded successfully"
     }
+    
+    if journal_entry_id:
+        response["journal_entry_id"] = journal_entry_id
+    
+    return response
 
 
 @router.get("/payments/student/{student_id}", response_model=list[dict])
@@ -600,3 +659,141 @@ async def get_payment_receipt(
         "remarks": payment.remarks,
         "created_at": payment.created_at.isoformat()
     }
+
+
+# ==================== GL Auto-posting Helper ====================
+
+async def _create_fee_journal_entry(
+    session: AsyncSession,
+    school_id: str,
+    payment: FeePayment,
+    fee: Fee,
+    fee_structure: FeeStructure,
+    amount: float,
+) -> str:
+    """
+    Create a journal entry for fee payment posting to GL.
+    
+    Posts:
+    - Dr. 1010 (Business Checking Account): Payment amount received
+    - Cr. GL account based on fee type:
+      - 4100 for tuition (TUITION)
+      - 4110 for examination (EXAMINATION)
+      - 4120 for sports (SPORTS)
+      - 4130 for ICT (ICT)
+      - 4140 for library (LIBRARY)
+      - 4150 for PTA (PTA)
+      - 4160 for maintenance (MAINTENANCE)
+      - 4100 for other (OTHER)
+    
+    Args:
+        session: AsyncSession
+        school_id: School identifier
+        payment: FeePayment instance
+        fee: Fee instance
+        fee_structure: FeeStructure with fee_type
+        amount: Payment amount
+        
+    Returns:
+        Journal entry ID
+        
+    Raises:
+        Exception: If GL accounts not found or other GL errors
+    """
+    from services.journal_entry_service import JournalEntryService
+    
+    # Map fee type to GL account code
+    fee_type_to_gl_account = {
+        FeeType.TUITION: "4100",
+        FeeType.EXAMINATION: "4110",
+        FeeType.SPORTS: "4120",
+        FeeType.ICT: "4130",
+        FeeType.LIBRARY: "4140",
+        FeeType.PTA: "4150",
+        FeeType.MAINTENANCE: "4160",
+        FeeType.OTHER: "4100",
+    }
+    
+    revenue_account_code = fee_type_to_gl_account.get(fee_structure.fee_type, "4100")
+    
+    # Get GL accounts: 1010 (Bank) and revenue account
+    result = await session.execute(
+        select(GLAccount).where(
+            and_(
+                GLAccount.school_id == school_id,
+                GLAccount.account_code == "1010",
+                GLAccount.is_active == True
+            )
+        )
+    )
+    bank_account = result.scalar_one_or_none()
+    
+    if not bank_account:
+        raise Exception("GL Account 1010 (Business Checking Account) not found or inactive")
+    
+    result = await session.execute(
+        select(GLAccount).where(
+            and_(
+                GLAccount.school_id == school_id,
+                GLAccount.account_code == revenue_account_code,
+                GLAccount.is_active == True
+            )
+        )
+    )
+    revenue_account = result.scalar_one_or_none()
+    
+    if not revenue_account:
+        raise Exception(f"GL Account {revenue_account_code} ({fee_structure.fee_type}) not found or inactive")
+    
+    # Get student name for description
+    student_result = await session.execute(
+        select(Student).where(Student.id == payment.student_id)
+    )
+    student = student_result.scalar_one_or_none()
+    student_name = f"{student.first_name} {student.last_name}" if student else "Unknown"
+    
+    # Build line items for journal entry
+    journal_line_items = [
+        # Debit: Bank account (deposit received)
+        JournalLineItemCreate(
+            gl_account_id=bank_account.id,
+            debit_amount=float(amount),
+            credit_amount=0.0,
+            description=f"Fee payment received from {student_name} - {fee_structure.fee_type}",
+        ),
+        # Credit: Revenue account (fee income recognized)
+        JournalLineItemCreate(
+            gl_account_id=revenue_account.id,
+            debit_amount=0.0,
+            credit_amount=float(amount),
+            description=f"Fee income from {student_name} - {fee_structure.fee_type} ({payment.receipt_number})",
+        ),
+    ]
+    
+    # Create the journal entry
+    entry_data = JournalEntryCreate(
+        entry_date=datetime.fromisoformat(payment.payment_date) if isinstance(payment.payment_date, str) else payment.payment_date,
+        reference_type=ReferenceType.FEE_PAYMENT,
+        reference_id=payment.id,
+        description=f"Fee payment from {student_name} ({payment.receipt_number})",
+        line_items=journal_line_items,
+        notes=f"Auto-posted from fee payment {payment.id} - Method: {payment.payment_method}",
+    )
+    
+    # Use JournalEntryService to create and post the entry
+    journal_service = JournalEntryService(session)
+    entry = await journal_service.create_entry(
+        school_id=school_id,
+        entry_data=entry_data,
+        created_by="SYSTEM",  # Mark as system-generated
+    )
+    
+    # Post the entry immediately (auto-posting)
+    posted_entry = await journal_service.post_entry(
+        school_id=school_id,
+        entry_id=entry.id,
+        posted_by="SYSTEM",
+        approval_notes="Auto-posted from fee payment",
+    )
+    
+    return posted_entry.id

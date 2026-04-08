@@ -20,6 +20,7 @@ class Attendance(SQLModel, table=True):
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
     class_id: str = Field(index=True)
+    academic_term_id: str = Field(index=True)
     attendance_date: str = Field(index=True)
     status: AttendanceStatus
     remarks: Optional[str] = None
@@ -31,6 +32,7 @@ class Attendance(SQLModel, table=True):
 class AttendanceCreate(SQLModel):
     student_id: str
     class_id: str
+    academic_term_id: str
     attendance_date: str
     status: AttendanceStatus
     remarks: Optional[str] = None

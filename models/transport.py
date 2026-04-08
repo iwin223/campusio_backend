@@ -272,6 +272,10 @@ class TransportFee(SQLModel, table=True):
     is_paid: bool = False
     due_date: Optional[str] = None
     
+    # GL Integration (auto-posting)
+    gl_journal_entry_id: Optional[str] = None
+    gl_posted_date: Optional[str] = None
+    
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -283,7 +287,11 @@ class TransportFeeCreate(SQLModel):
     academic_term_id: Optional[str] = None
     fee_type: TransportFeeType
     amount_due: float
+    amount_paid: float = 0.0
     discount: float = 0.0
+    payment_date: Optional[str] = None
+    payment_method: Optional[str] = None
+    receipt_number: Optional[str] = None
     due_date: Optional[str] = None
     notes: Optional[str] = None
 

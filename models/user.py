@@ -9,6 +9,7 @@ import uuid
 class UserRole(str, Enum):
     SUPER_ADMIN = "super_admin"
     SCHOOL_ADMIN = "school_admin"
+    HR = "hr"
     TEACHER = "teacher"
     STUDENT = "student"
     PARENT = "parent"

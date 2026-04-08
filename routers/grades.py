@@ -72,15 +72,85 @@ async def record_grade(
     await session.refresh(grade)
     
     return {
+        "grade_id": grade.id,
         "id": grade.id,
         "student_id": grade.student_id,
         "subject_id": grade.subject_id,
+        "class_id": grade.class_id,
         "assessment_type": grade.assessment_type,
         "score": grade.score,
         "max_score": grade.max_score,
+        "weight": grade.weight,
         "percentage": round(grade.score / grade.max_score * 100, 1),
+        "recorded_at": grade.created_at.isoformat(),
         "message": "Grade recorded"
     }
+
+
+@router.patch("/{grade_id}", response_model=dict)
+async def update_grade(
+    grade_id: str,
+    grade_data: GradeCreate,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.TEACHER)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Update a grade"""
+    result = await session.execute(select(Grade).where(Grade.id == grade_id))
+    grade = result.scalar_one_or_none()
+    
+    if not grade:
+        raise HTTPException(status_code=404, detail="Grade not found")
+    
+    if current_user.role != UserRole.SUPER_ADMIN and current_user.school_id != grade.school_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Update grade fields
+    update_data = grade_data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(grade, key, value)
+    
+    grade.updated_at = datetime.utcnow()
+    session.add(grade)
+    await session.commit()
+    await session.refresh(grade)
+    
+    return {
+        "grade_id": grade.id,
+        "id": grade.id,
+        "student_id": grade.student_id,
+        "subject_id": grade.subject_id,
+        "class_id": grade.class_id,
+        "assessment_type": grade.assessment_type,
+        "score": grade.score,
+        "max_score": grade.max_score,
+        "weight": grade.weight,
+        "percentage": round(grade.score / grade.max_score * 100, 1),
+        "recorded_at": grade.created_at.isoformat(),
+        "updated_at": grade.updated_at.isoformat(),
+        "message": "Grade updated"
+    }
+
+
+@router.delete("/{grade_id}", response_model=dict)
+async def delete_grade(
+    grade_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.TEACHER)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Delete a grade"""
+    result = await session.execute(select(Grade).where(Grade.id == grade_id))
+    grade = result.scalar_one_or_none()
+    
+    if not grade:
+        raise HTTPException(status_code=404, detail="Grade not found")
+    
+    if current_user.role != UserRole.SUPER_ADMIN and current_user.school_id != grade.school_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    await session.delete(grade)
+    await session.commit()
+    
+    return {"message": "Grade deleted successfully"}
 
 
 @router.get("/student/{student_id}", response_model=dict)
@@ -347,12 +417,15 @@ async def get_class_grades(
             "grades": [
                 {
                     "id": g.id,
+                    "grade_id": g.id,
                     "subject_id": g.subject_id,
                     "subject_name": subject_names.get(g.subject_id, "Unknown"),
                     "assessment_type": g.assessment_type,
                     "score": g.score,
                     "max_score": g.max_score,
+                    "weight": g.weight,
                     "percentage": round(g.score / g.max_score * 100, 1),
+                    "recorded_at": g.created_at.isoformat(),
                     "letter_grade": get_letter_grade(g.score / g.max_score * 100)["grade"]
                 }
                 for g in student_grades
@@ -365,6 +438,7 @@ async def get_class_grades(
     return {
         "class_id": class_id,
         "class_name": classroom.name,
+        "subject_id": subject_id,
         "student_count": len(students),
         "students": students_data
     }

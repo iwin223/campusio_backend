@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     resend_from_email: str 
     resend_from_name: str 
     
+    # USMS SMS Service
+    usms_token: str
+    usms_sender_id: str = "SchoolERP"
+    usms_base_url: str = "https://webapp.usmsgh.com"
+    
     # CORS
     cors_origins: list[str]    
     class Config:

@@ -29,6 +29,7 @@ from models.staff import Staff,TeacherAssignment
 from models.student import Student,Parent,StudentParent
 from models.timetable import Period,Timetable  
 from models.user import User
+from models.payroll import PayrollContract, PayrollRun, PayrollLineItem, PayrollAdjustment
 
 # set target metadata for 'autogenerate' support
 target_metadata = SQLModel.metadata

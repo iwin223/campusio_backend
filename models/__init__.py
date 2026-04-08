@@ -7,9 +7,23 @@ from models.classroom import Class, ClassCreate, ClassLevel, Subject, SubjectCre
 from models.attendance import Attendance, AttendanceCreate, AttendanceBulkCreate, AttendanceStatus, StaffAttendance
 from models.grade import Grade, GradeCreate, AssessmentType, GradeScale, ReportCard
 from models.fee import Fee, FeeCreate, FeeStructure, FeeStructureCreate, FeePayment, FeePaymentCreate, FeeType, PaymentStatus, PaymentMethod
+from models.payroll import (
+    PayrollContract, PayrollContractCreate, PayrollContractUpdate, PaySchedule,
+    PayrollRun, PayrollRunCreate, PayrollStatus,
+    PayrollLineItem, PayrollAdjustment, PayrollAdjustmentCreate,
+    PayrollCategory, PayslipResponse
+)
 from models.timetable import Timetable, TimetableCreate, Period, PeriodCreate, DayOfWeek, PeriodType
 from models.communication import Announcement, AnnouncementCreate, AnnouncementType, AnnouncementAudience, Message, MessageCreate, EmailNotification
 from models.report_template import ReportTemplate, ReportTemplateCreate, ReportTemplateUpdate, ReportTemplateResponse
+from models.assignment import (
+    Assignment, AssignmentCreate, AssignmentUpdate, AssignmentResponse, AssignmentType, AssignmentStatus,
+    Submission, SubmissionCreate, SubmissionGrade, SubmissionResponse, SubmissionStatus,
+    TeacherResource, TeacherResourceCreate, ResourceType,
+    LearningMaterial, LearningMaterialCreate,
+    StudentProgressNote, StudentProgressNoteCreate, StudentProgressNoteResponse, ProgressNoteType,
+    AssignmentStats, ClassPerformanceMetrics, SubmissionSummary
+)
 from models.transport import (
     Vehicle, VehicleCreate, VehicleUpdate, VehicleStatus, VehicleType,
     Route, RouteCreate, RouteUpdate, RouteStatus,
@@ -40,9 +54,21 @@ __all__ = [
     "Attendance", "AttendanceCreate", "AttendanceBulkCreate", "AttendanceStatus", "StaffAttendance",
     "Grade", "GradeCreate", "AssessmentType", "GradeScale", "ReportCard",
     "Fee", "FeeCreate", "FeeStructure", "FeeStructureCreate", "FeePayment", "FeePaymentCreate", "FeeType", "PaymentStatus", "PaymentMethod",
+    "PayrollContract", "PayrollContractCreate", "PayrollContractUpdate", "PaySchedule",
+    "PayrollRun", "PayrollRunCreate", "PayrollStatus",
+    "PayrollLineItem", "PayrollAdjustment", "PayrollAdjustmentCreate",
+    "PayrollCategory", "PayslipResponse",
     "Timetable", "TimetableCreate", "Period", "PeriodCreate", "DayOfWeek", "PeriodType",
     "Announcement", "AnnouncementCreate", "AnnouncementType", "AnnouncementAudience", "Message", "MessageCreate", "EmailNotification",
     "ReportTemplate", "ReportTemplateCreate", "ReportTemplateUpdate", "ReportTemplateResponse",
+    # Teacher Portal - Assignment/Submission Models
+    "Assignment", "AssignmentCreate", "AssignmentUpdate", "AssignmentResponse", "AssignmentType", "AssignmentStatus",
+    "Submission", "SubmissionCreate", "SubmissionGrade", "SubmissionResponse", "SubmissionStatus",
+    "TeacherResource", "TeacherResourceCreate", "ResourceType",
+    "LearningMaterial", "LearningMaterialCreate",
+    "StudentProgressNote", "StudentProgressNoteCreate", "StudentProgressNoteResponse", "ProgressNoteType",
+    "AssignmentStats", "ClassPerformanceMetrics", "SubmissionSummary",
+    # Transport Module
     "Vehicle", "VehicleCreate", "VehicleUpdate", "VehicleStatus", "VehicleType",
     "Route", "RouteCreate", "RouteUpdate", "RouteStatus",
     "StudentTransport", "StudentTransportCreate", "StudentTransportUpdate",
@@ -50,6 +76,7 @@ __all__ = [
     "TransportFee", "TransportFeeCreate", "TransportFeeUpdate", "TransportFeeType",
     "VehicleMaintenance", "VehicleMaintenanceCreate",
     "DriverStaff", "DriverStaffCreate", "DriverStaffUpdate",
+    # Hostel Module
     "Hostel", "HostelCreate", "HostelUpdate", "HostelStatus",
     "Room", "RoomCreate", "RoomUpdate", "RoomType", "RoomStatus",
     "StudentHostel", "StudentHostelCreate", "StudentHostelUpdate", "StudentHostelStatus",

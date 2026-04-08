@@ -11,8 +11,13 @@ from models.fee import Fee, FeePayment, FeeStructure, PaymentStatus
 from models.attendance import Attendance, AttendanceStatus
 from models.classroom import Class, Subject
 from models.communication import Announcement
+from models.assignment import Assignment, Submission, SubmissionStatus, AssignmentStatus
+from models.staff import Staff
+from models.hostel import StudentHostel, HostelFee, Room, Hostel
+from models.transport import StudentTransport, TransportFee, Route
 from database import get_session
 from auth import get_current_user, require_roles
+from services.assignment_performance import AssignmentPerformanceService
 
 router = APIRouter(prefix="/parent", tags=["Parent Portal"])
 
@@ -118,10 +123,11 @@ async def get_my_children(
 @router.get("/child/{student_id}/overview", response_model=dict)
 async def get_child_overview(
     student_id: str,
+    term_id: Optional[str] = None,
     current_user: User = Depends(require_roles(UserRole.PARENT)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get overview of a child's information"""
+    """Get overview of a child's information, optionally filtered by term"""
     student = await verify_child_access(student_id, current_user, session)
     
     # Get class info
@@ -133,12 +139,16 @@ async def get_child_overview(
     
     # Get recent attendance (last 30 days)
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-    attendance_result = await session.execute(
-        select(Attendance).where(
-            Attendance.student_id == student_id,
-            Attendance.created_at >= thirty_days_ago
-        )
+    attendance_query = select(Attendance).where(
+        Attendance.student_id == student_id,
+        Attendance.created_at >= thirty_days_ago
     )
+    
+    # Filter by term if provided
+    if term_id:
+        attendance_query = attendance_query.where(Attendance.academic_term_id == term_id)
+    
+    attendance_result = await session.execute(attendance_query)
     attendance_records = attendance_result.scalars().all()
     
     present_count = sum(1 for a in attendance_records if a.status == AttendanceStatus.PRESENT)
@@ -148,18 +158,26 @@ async def get_child_overview(
     attendance_rate = round((present_count / total_days * 100) if total_days > 0 else 0, 1)
     
     # Get fee balance
-    fee_result = await session.execute(
-        select(Fee).where(Fee.student_id == student_id)
-    )
+    fee_query = select(Fee).where(Fee.student_id == student_id)
+    
+    # Filter fees by term if provided
+    if term_id:
+        fee_query = fee_query.where(Fee.academic_term_id == term_id)
+    
+    fee_result = await session.execute(fee_query)
     fees = fee_result.scalars().all()
     total_due = sum(f.amount_due for f in fees)
     total_paid = sum(f.amount_paid for f in fees)
     fee_balance = total_due - total_paid
     
     # Get recent grades count
-    grades_result = await session.execute(
-        select(Grade).where(Grade.student_id == student_id)
-    )
+    grades_query = select(Grade).where(Grade.student_id == student_id)
+    
+    # Filter grades by term if provided
+    if term_id:
+        grades_query = grades_query.where(Grade.academic_term_id == term_id)
+    
+    grades_result = await session.execute(grades_query)
     grades = grades_result.scalars().all()
     
     return {
@@ -192,16 +210,21 @@ async def get_child_overview(
 @router.get("/child/{student_id}/grades", response_model=dict)
 async def get_child_grades(
     student_id: str,
+    term_id: Optional[str] = None,
     current_user: User = Depends(require_roles(UserRole.PARENT)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get child's grades"""
+    """Get child's grades, optionally filtered by academic term"""
     student = await verify_child_access(student_id, current_user, session)
     
-    # Get grades
-    grades_result = await session.execute(
-        select(Grade).where(Grade.student_id == student_id)
-    )
+    # Build query for grades
+    query = select(Grade).where(Grade.student_id == student_id)
+    
+    # Filter by term if provided
+    if term_id:
+        query = query.where(Grade.academic_term_id == term_id)
+    
+    grades_result = await session.execute(query)
     grades = grades_result.scalars().all()
     
     # Get subjects
@@ -273,16 +296,21 @@ async def get_child_grades(
 @router.get("/child/{student_id}/fees", response_model=dict)
 async def get_child_fees(
     student_id: str,
+    term_id: Optional[str] = None,
     current_user: User = Depends(require_roles(UserRole.PARENT)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get child's fee details"""
+    """Get child's fee details, optionally filtered by academic term"""
     student = await verify_child_access(student_id, current_user, session)
     
-    # Get fees
-    fee_result = await session.execute(
-        select(Fee).where(Fee.student_id == student_id)
-    )
+    # Build query for fees
+    query = select(Fee).where(Fee.student_id == student_id)
+    
+    # Filter by term if provided
+    if term_id:
+        query = query.where(Fee.academic_term_id == term_id)
+    
+    fee_result = await session.execute(query)
     fees = fee_result.scalars().all()
     
     # Get fee structures
@@ -348,20 +376,26 @@ async def get_child_fees(
 async def get_child_attendance(
     student_id: str,
     days: int = 30,
+    term_id: Optional[str] = None,
     current_user: User = Depends(require_roles(UserRole.PARENT)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get child's attendance history"""
+    """Get child's attendance history, optionally filtered by academic term"""
     student = await verify_child_access(student_id, current_user, session)
     
-    # Get attendance
-    start_date = datetime.utcnow() - timedelta(days=days)
-    attendance_result = await session.execute(
-        select(Attendance).where(
-            Attendance.student_id == student_id,
-            Attendance.created_at >= start_date
-        ).order_by(Attendance.attendance_date.desc())
+    # Build query for attendance
+    query = select(Attendance).where(
+        Attendance.student_id == student_id,
+        Attendance.created_at >= datetime.utcnow() - timedelta(days=days)
     )
+    
+    # Filter by term if provided
+    if term_id:
+        query = query.where(Attendance.academic_term_id == term_id)
+    
+    query = query.order_by(Attendance.attendance_date.desc())
+    
+    attendance_result = await session.execute(query)
     records = attendance_result.scalars().all()
     
     # Calculate summary
@@ -422,3 +456,357 @@ async def get_announcements_for_parent(
         }
         for a in announcements
     ]
+
+
+# ============================================================================
+# ASSIGNMENTS ENDPOINTS
+# ============================================================================
+
+@router.get("/child/{student_id}/assignments", response_model=dict)
+async def get_child_assignments(
+    student_id: str,
+    term_id: Optional[str] = None,
+    current_user: User = Depends(require_roles(UserRole.PARENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get all assignments for a parent's child, optionally filtered by academic term"""
+    # Verify parent has access to this student
+    student = await verify_child_access(student_id, current_user, session)
+    
+    if not student.class_id:
+        return {"assignments": [], "message": "Child has no class assigned"}
+    
+    # Build query for assignments
+    query = select(Assignment).where(
+        Assignment.school_id == current_user.school_id,
+        Assignment.class_id == student.class_id,
+        Assignment.status == AssignmentStatus.PUBLISHED
+    )
+    
+    # Filter by term if provided
+    if term_id:
+        query = query.where(Assignment.academic_term_id == term_id)
+    
+    query = query.order_by(Assignment.due_date)
+    
+    assignments_result = await session.execute(query)
+    assignments = assignments_result.scalars().all()
+    
+    # Get student's submissions for these assignments
+    submissions = {}
+    if assignments:
+        assignment_ids = [a.id for a in assignments]
+        submissions_result = await session.execute(
+            select(Submission).where(
+                Submission.student_id == student.id,
+                Submission.assignment_id.in_(assignment_ids)
+            )
+        )
+        for sub in submissions_result.scalars().all():
+            submissions[sub.assignment_id] = sub
+    
+    # Get teacher and subject info
+    teacher_info = {}
+    subject_info = {}
+    
+    assignment_list = []
+    for assignment in assignments:
+        # Get teacher name
+        if assignment.teacher_id not in teacher_info:
+            teacher_result = await session.execute(
+                select(Staff).where(Staff.id == assignment.teacher_id)
+            )
+            staff = teacher_result.scalar_one_or_none()
+            teacher_info[assignment.teacher_id] = f"{staff.first_name} {staff.last_name}" if staff else "Unknown"
+        
+        # Get subject name
+        if assignment.subject_id not in subject_info:
+            subject_result = await session.execute(
+                select(Subject).where(Subject.id == assignment.subject_id)
+            )
+            subject = subject_result.scalar_one_or_none()
+            subject_info[assignment.subject_id] = subject.name if subject else "Unknown"
+        
+        submission = submissions.get(assignment.id)
+        
+        # Determine submission status
+        submission_status = "pending"
+        if submission:
+            if submission.submission_date:
+                submission_status = "submitted"
+                if submission.status == SubmissionStatus.GRADED:
+                    submission_status = "graded"
+            if assignment.due_date and datetime.utcnow() > assignment.due_date and not submission.submission_date:
+                submission_status = "overdue"
+        elif assignment.due_date and datetime.utcnow() > assignment.due_date:
+            submission_status = "overdue"
+        
+        assignment_list.append({
+            "id": assignment.id,
+            "title": assignment.title,
+            "description": assignment.description,
+            "subject_name": subject_info[assignment.subject_id],
+            "teacher_name": teacher_info[assignment.teacher_id],
+            "assignment_type": assignment.assignment_type,
+            "due_date": assignment.due_date.isoformat() if assignment.due_date else None,
+            "created_at": assignment.created_date.isoformat() if assignment.created_date else None,
+            "submission_status": submission_status,
+            "submitted_at": submission.submission_date.isoformat() if submission and submission.submission_date else None,
+            "graded": submission.status == SubmissionStatus.GRADED if submission else False,
+            "score": submission.score if submission else None,
+            "max_score": submission.max_score if submission else assignment.points_possible,
+            "percentage": ((submission.score / assignment.points_possible) * 100) if submission and submission.score else None,
+            "feedback": submission.feedback if submission else None
+        })
+    
+    return {
+        "assignments": assignment_list,
+        "message": f"Found {len(assignment_list)} assignments for {student.first_name}"
+    }
+
+
+@router.get("/child/{student_id}/assignment-metrics", response_model=dict)
+async def get_assignment_performance_metrics(
+    student_id: str,
+    term_id: Optional[str] = None,
+    current_user: User = Depends(require_roles(UserRole.PARENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get comprehensive assignment performance metrics for a child.
+    
+    Returns 5 metrics:
+    1. Assignment Performance Index (API) - overall performance percentage
+    2. Subject-wise Performance - breakdown by subject with trends
+    3. Completion & Punctuality - submission rate and timeliness
+    4. Assessment Type Breakdown - performance by assignment type
+    5. Progress Trend - performance trajectory through the term
+    
+    Args:
+        student_id: Child's student ID
+        term_id: Optional academic term ID. If not provided, uses current term
+    """
+    # Verify parent has access to this student
+    student = await verify_child_access(student_id, current_user, session)
+    
+    # Get current term if not specified
+    if not term_id:
+        from models.school import AcademicTerm
+        from sqlalchemy import desc
+        
+        term_result = await session.execute(
+            select(AcademicTerm)
+            .where(
+                AcademicTerm.school_id == current_user.school_id,
+                AcademicTerm.is_active == True
+            )
+            .order_by(desc(AcademicTerm.start_date))
+            .limit(1)
+        )
+        current_term = term_result.scalar_one_or_none()
+        
+        if not current_term:
+            return {
+                "error": "No active academic term found"
+            }
+        
+        term_id = current_term.id
+    
+    # Use service to calculate metrics
+    service = AssignmentPerformanceService(session)
+    metrics = await service.get_all_metrics(
+        student_id=student_id,
+        academic_term_id=term_id,
+        current_user=current_user,
+        session=session
+    )
+    
+    return metrics
+
+
+# ============================================================================
+# OPTIONAL MODULES - ENROLLMENT STATUS ENDPOINTS
+# ============================================================================
+
+@router.get("/child/{child_id}/enrollment-status", response_model=dict)
+async def get_child_enrollment_status(
+    child_id: str,
+    current_user: User = Depends(require_roles(UserRole.PARENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Check which optional modules child is enrolled in"""
+    # Verify parent-child relationship
+    student = await verify_child_access(child_id, current_user, session)
+    
+    # Check hostel enrollment
+    hostel_result = await session.execute(
+        select(StudentHostel).where(
+            StudentHostel.student_id == child_id,
+            StudentHostel.school_id == student.school_id,
+            StudentHostel.status == "active"
+        )
+    )
+    has_hostel = hostel_result.scalar_one_or_none() is not None
+    
+    # Check transport enrollment
+    transport_result = await session.execute(
+        select(StudentTransport).where(
+            StudentTransport.student_id == child_id,
+            StudentTransport.school_id == student.school_id,
+            StudentTransport.is_active == True
+        )
+    )
+    has_transport = transport_result.scalar_one_or_none() is not None
+    
+    return {
+        "student_id": child_id,
+        "student_name": f"{student.first_name} {student.last_name}",
+        "has_hostel": has_hostel,
+        "has_transport": has_transport,
+        "enabled_modules": {
+            "hostel": has_hostel,
+            "transport": has_transport,
+            "fees": True,
+            "grades": True,
+            "attendance": True,
+            "assignments": True
+        }
+    }
+
+
+@router.get("/child/{child_id}/hostel/status", response_model=dict)
+async def get_child_hostel_status(
+    child_id: str,
+    current_user: User = Depends(require_roles(UserRole.PARENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get child's hostel info if enrolled"""
+    # Verify parent-child relationship
+    student = await verify_child_access(child_id, current_user, session)
+    
+    hostel_result = await session.execute(
+        select(StudentHostel).where(
+            StudentHostel.student_id == child_id,
+            StudentHostel.school_id == student.school_id,
+            StudentHostel.status == "active"
+        )
+    )
+    hostel = hostel_result.scalar_one_or_none()
+    
+    if not hostel:
+        raise HTTPException(status_code=404, detail="Child is not enrolled in hostel")
+    
+    # Get room details to get the actual room number
+    room_result = await session.execute(
+        select(Room).where(Room.id == hostel.room_id)
+    )
+    room = room_result.scalar_one_or_none()
+    room_number = room.room_number if room else hostel.room_id
+    
+    # Get hostel details to get the hostel name
+    hostel_detail_result = await session.execute(
+        select(Hostel).where(Hostel.id == hostel.hostel_id)
+    )
+    hostel_detail = hostel_detail_result.scalar_one_or_none()
+    hostel_name = hostel_detail.hostel_name if hostel_detail else hostel.hostel_id
+    
+    # Get recent fees for this hostel
+    fees_result = await session.execute(
+        select(HostelFee).where(
+            HostelFee.student_id == child_id,
+            HostelFee.school_id == student.school_id
+        ).order_by(HostelFee.created_at.desc()).limit(10)
+    )
+    fees = fees_result.scalars().all()
+    
+    return {
+        "student_id": child_id,
+        "student_name": f"{student.first_name} {student.last_name}",
+        "enrolled": True,
+        "hostel_name": hostel_name,
+        "assigned_date": hostel.check_in_date,
+        "room_number": room_number,
+        "academic_year": hostel.academic_year,
+        "parent_contact": hostel.parent_contact,
+        "emergency_contact": hostel.emergency_contact,
+        "emergency_contact_phone": hostel.emergency_contact_phone,
+        "recent_fees": [
+            {
+                "id": f.id,
+                "fee_type": f.fee_type,
+                "amount_due": f.amount_due,
+                "amount_paid": f.amount_paid,
+                "balance": f.amount_due - f.amount_paid - f.discount,
+                "is_paid": f.is_paid,
+                "due_date": f.due_date,
+                "payment_date": f.payment_date,
+                "payment_method": f.payment_method
+            }
+            for f in fees
+        ]
+    }
+
+
+@router.get("/child/{child_id}/transport/status", response_model=dict)
+async def get_child_transport_status(
+    child_id: str,
+    current_user: User = Depends(require_roles(UserRole.PARENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get child's transport info if enrolled"""
+    # Verify parent-child relationship
+    student = await verify_child_access(child_id, current_user, session)
+    
+    transport_result = await session.execute(
+        select(StudentTransport).where(
+            StudentTransport.student_id == child_id,
+            StudentTransport.school_id == student.school_id,
+            StudentTransport.is_active == True
+        )
+    )
+    transport = transport_result.scalar_one_or_none()
+    
+    if not transport:
+        raise HTTPException(status_code=404, detail="Child is not enrolled in transport")
+    
+    # Get route details
+    route_result = await session.execute(
+        select(Route).where(Route.id == transport.route_id)
+    )
+    route = route_result.scalar_one_or_none()
+    
+    # Get fees for this route
+    fees_result = await session.execute(
+        select(TransportFee).where(
+            TransportFee.student_id == child_id,
+            TransportFee.school_id == student.school_id
+        ).order_by(TransportFee.created_at.desc()).limit(10)
+    )
+    fees = fees_result.scalars().all()
+    
+    return {
+        "student_id": child_id,
+        "student_name": f"{student.first_name} {student.last_name}",
+        "enrolled": True,
+        "route_id": transport.route_id,
+        "route_name": route.route_name if route else "Unknown",
+        "pickup_point": transport.pickup_point or "N/A",
+        "dropoff_point": transport.dropoff_point or "N/A",
+        "enrollment_date": transport.enrollment_date,
+        "emergency_contact": transport.emergency_contact,
+        "emergency_contact_phone": transport.emergency_contact_phone,
+        "recent_fees": [
+            {
+                "id": f.id,
+                "fee_type": f.fee_type,
+                "amount_due": f.amount_due,
+                "amount_paid": f.amount_paid,
+                "balance": f.amount_due - f.amount_paid - f.discount,
+                "is_paid": f.is_paid,
+                "due_date": f.due_date,
+                "payment_date": f.payment_date,
+                "payment_method": f.payment_method
+            }
+            for f in fees
+        ]
+    }
