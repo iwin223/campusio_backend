@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
 from typing import List, Optional
 from models.user import User, UserRole
-from models.student import StudentParent, Parent,Student
+from models.student import StudentParent, Student, Parent
 from models.grade import Grade
 from models.fee import Fee, FeePayment, FeeStructure, PaymentStatus
 from models.attendance import Attendance, AttendanceStatus
@@ -24,16 +24,16 @@ router = APIRouter(prefix="/parent", tags=["Parent Portal"])
 
 async def get_parent_children_ids(current_user: User, session: AsyncSession) -> List[str]:
     """Helper function to get student IDs for a parent's children"""
-    # Get parent record linked to current user
+    # 1. Get the Parent record linked to this User
     parent_result = await session.execute(
         select(Parent).where(Parent.user_id == current_user.id)
     )
     parent = parent_result.scalar_one_or_none()
-
+    
     if not parent:
         return []
-
-    # Get student-parent relationships
+    
+    # 2. Get student-parent relationships using the Parent's ID
     student_parent_result = await session.execute(
         select(StudentParent).where(StudentParent.parent_id == parent.id)
     )
@@ -301,9 +301,15 @@ async def get_child_fees(
     session: AsyncSession = Depends(get_session)
 ):
     """Get child's fee details, optionally filtered by academic term"""
-    student = await verify_child_access(student_id, current_user, session)
+    import sys
+    print("=" * 80, file=sys.stderr)
+    print(f"FEES ENDPOINT CALLED - student_id={student_id}, term_id={term_id}", file=sys.stderr)
+    print("=" * 80, file=sys.stderr)
     
-    # Build query for fees
+    student = await verify_child_access(student_id, current_user, session)
+    print(f"STUDENT FOUND: {student.first_name} {student.last_name}, class_id={student.class_id}", file=sys.stderr)
+    
+    # First, try to get fees directly assigned to the student
     query = select(Fee).where(Fee.student_id == student_id)
     
     # Filter by term if provided
@@ -312,6 +318,97 @@ async def get_child_fees(
     
     fee_result = await session.execute(query)
     fees = fee_result.scalars().all()
+    print(f"DIRECT FEES: {len(fees)} found", file=sys.stderr)
+    
+    # If no direct fees found, try to get fees by class (fees are usually assigned at class level)
+    if not fees and student.class_id:
+        print(f"NO DIRECT FEES. Looking up class_id={student.class_id}", file=sys.stderr)
+        
+        # Get the student's class to get its name/level
+        class_result = await session.execute(
+            select(Class).where(Class.id == student.class_id)
+        )
+        student_class = class_result.scalar_one_or_none()
+        print(f"CLASS LOOKUP: {student_class.name if student_class else 'CLASS NOT FOUND'}", file=sys.stderr)
+        
+        if student_class:
+            # Query FeeStructure by class_level (the ClassLevel enum like "jhs_1", not display name)
+            # FeeStructure.class_level stores the enum value, not the display name
+            class_level_value = student_class.level.value if hasattr(student_class.level, 'value') else str(student_class.level)
+            struct_query = select(FeeStructure).where(
+                FeeStructure.class_level == class_level_value,
+                FeeStructure.school_id == student.school_id
+            )
+            
+            # Filter by term if provided
+            if term_id:
+                struct_query = struct_query.where(FeeStructure.academic_term_id == term_id)
+                print(f"QUERY: class_level='{class_level_value}', school_id='{student.school_id}', term_id='{term_id}'", file=sys.stderr)
+            else:
+                print(f"QUERY: class_level='{class_level_value}', school_id='{student.school_id}', no term filter", file=sys.stderr)
+            
+            struct_result = await session.execute(struct_query)
+            fee_structures = struct_result.scalars().all()
+            print(f"FEESTRUCTURES WITH TERM: {len(fee_structures)} found", file=sys.stderr)
+            
+            # Debug: Check what FeeStructures actually exist in DB
+            all_structures_query = select(FeeStructure).where(FeeStructure.school_id == student.school_id)
+            all_structures_result = await session.execute(all_structures_query)
+            all_structures = all_structures_result.scalars().all()
+            print(f"DEBUG: Total FeeStructures in school: {len(all_structures)}", file=sys.stderr)
+            for fs in all_structures[:5]:  # Show first 5
+                print(f"  - class_level='{fs.class_level}', fee_type={fs.fee_type}, amount={fs.amount}", file=sys.stderr)
+            
+            # If no fees found for that term, try without term filter (they may apply across terms)
+            if not fee_structures and term_id:
+                print(f"NO TERM FEES. Trying without term filter...", file=sys.stderr)
+                struct_query = select(FeeStructure).where(
+                    FeeStructure.class_level == class_level_value,
+                    FeeStructure.school_id == student.school_id
+                )
+                struct_result = await session.execute(struct_query)
+                fee_structures = struct_result.scalars().all()
+                print(f"FEESTRUCTURES WITHOUT TERM: {len(fee_structures)} found", file=sys.stderr)
+            
+            # Convert fee structures to fee records for the student
+            # Create actual Fee records in the database (idempotent - won't duplicate)
+            fees = []
+            for structure in fee_structures:
+                # Check if Fee already exists for this student + structure + term
+                existing_fee_result = await session.execute(
+                    select(Fee).where(
+                        Fee.student_id == student_id,
+                        Fee.fee_structure_id == structure.id,
+                        Fee.academic_term_id == structure.academic_term_id,
+                        Fee.school_id == student.school_id
+                    )
+                )
+                existing_fee = existing_fee_result.scalar_one_or_none()
+                
+                if existing_fee:
+                    # Use existing Fee record
+                    fees.append(existing_fee)
+                    print(f"FEE EXISTS: {structure.fee_type} - GHS {structure.amount} for term {structure.academic_term_id}", file=sys.stderr)
+                else:
+                    # Create new Fee record
+                    new_fee = Fee(
+                        student_id=student_id,
+                        fee_structure_id=structure.id,
+                        amount_due=structure.amount,
+                        amount_paid=0,
+                        discount=0,
+                        status=PaymentStatus.PENDING,
+                        academic_term_id=structure.academic_term_id,
+                        school_id=student.school_id
+                    )
+                    session.add(new_fee)
+                    fees.append(new_fee)
+                    print(f"FEE CREATED IN DB: {structure.fee_type} - GHS {structure.amount}", file=sys.stderr)
+            
+            # Flush to ensure fees are persisted and have IDs
+            await session.flush()
+    
+    print(f"TOTAL FEES READY: {len(fees)} fees", file=sys.stderr)
     
     # Get fee structures
     structure_ids = list(set(f.fee_structure_id for f in fees))
@@ -320,7 +417,7 @@ async def get_child_fees(
         struct_result = await session.execute(select(FeeStructure).where(FeeStructure.id.in_(structure_ids)))
         structures = {s.id: s for s in struct_result.scalars().all()}
     
-    # Get payments
+    # Get payments for all fees
     fee_ids = [f.id for f in fees]
     payments = []
     if fee_ids:
@@ -336,16 +433,25 @@ async def get_child_fees(
     
     for fee in fees:
         structure = structures.get(fee.fee_structure_id)
-        fee_payments = [p for p in payments if p.fee_id == fee.id]
+        fee_payments = [p for p in payments if p.fee_id == fee.id or p.fee_structure_id == fee.fee_structure_id]
+        
+        # Calculate actual amount paid from payments
+        actual_paid = sum(p.amount for p in fee_payments) if fee_payments else fee.amount_paid
+        balance = fee.amount_due - actual_paid - fee.discount
+        
+        # Generate fee name from fee_type (e.g., "tuition" -> "Tuition Fee")
+        fee_type_name = structure.fee_type.value.replace('_', ' ').title() if structure else "Fee"
         
         fees_list.append({
             "id": fee.id,
-            "fee_type": structure.fee_type if structure else "unknown",
+            "fee_name": f"{fee_type_name} Fee",
+            "fee_type": structure.fee_type if structure else "tuition",
             "description": structure.description if structure else None,
             "amount_due": fee.amount_due,
-            "amount_paid": fee.amount_paid,
-            "balance": fee.amount_due - fee.amount_paid - fee.discount,
-            "status": fee.status,
+            "amount_paid": actual_paid,
+            "balance": max(0, balance),
+            "discount": fee.discount,
+            "status": "paid" if balance <= 0 else "outstanding",
             "due_date": structure.due_date if structure else None,
             "payments": [
                 {
@@ -358,14 +464,17 @@ async def get_child_fees(
             ]
         })
         total_due += fee.amount_due
-        total_paid += fee.amount_paid
+        total_paid += actual_paid
+    
+    print(f"RESPONSE: {len(fees_list)} fees. Total due: GHS {total_due}, Total paid: GHS {total_paid}", file=sys.stderr)
+    print("=" * 80, file=sys.stderr)
     
     return {
         "student_name": f"{student.first_name} {student.last_name}",
         "summary": {
             "total_due": total_due,
             "total_paid": total_paid,
-            "balance": total_due - total_paid,
+            "balance": max(0, total_due - total_paid),
             "collection_rate": round((total_paid / total_due * 100) if total_due > 0 else 100, 1)
         },
         "fees": fees_list
@@ -598,7 +707,7 @@ async def get_assignment_performance_metrics(
             select(AcademicTerm)
             .where(
                 AcademicTerm.school_id == current_user.school_id,
-                AcademicTerm.is_active == True
+                AcademicTerm.is_current == True
             )
             .order_by(desc(AcademicTerm.start_date))
             .limit(1)

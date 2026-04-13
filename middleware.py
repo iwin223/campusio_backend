@@ -37,13 +37,22 @@ rate_limit_storage = defaultdict(list)
 
 def register_middleware(app: FastAPI):
 
+    # Allow both localhost and 127.0.0.1 origins for frontend  
+    allow_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8080",  # Alternative frontend port
+        "http://127.0.0.1:8080",  # Alternative frontend port
+        "https://localhost:3000",  # HTTPS variants
+        "https://127.0.0.1:3000",
+    ]
     
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
+        allow_origins=allow_origins,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allow_headers=["*"],
-        allow_credentials=True,
+        allow_credentials=True,  # Now safe since we have specific origins
     )
 
     app.add_middleware(

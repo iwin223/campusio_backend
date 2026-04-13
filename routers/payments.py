@@ -5,12 +5,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from pydantic import BaseModel
 import os
 
 from database import get_session
 from auth import get_current_user
 from models.payment import OnlineTransaction, TransactionStatus
-from models.user import User
+from models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,10 @@ def get_payment_services():
 # REQUEST/RESPONSE MODELS
 # ============================================================================
 
-class InitiatePaymentRequest:
+class InitiatePaymentRequest(BaseModel):
     """Request to initiate payment"""
     fee_id: str
+    amount_to_pay: Optional[float] = None  # Optional partial payment amount
 
 
 class TransactionResponse:
@@ -62,7 +64,7 @@ class TransactionResponse:
 
 @router.post("/initialize", status_code=200)
 async def initialize_payment(
-    fee_id: str,
+    request_data: InitiatePaymentRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -71,8 +73,12 @@ async def initialize_payment(
     
     **Auth Required:** Parent role
     
-    **Query Parameters:**
-    - fee_id: UUID of the fee to pay
+    **Request Body:**
+    ```json
+    {
+        "fee_id": "uuid-of-fee"
+    }
+    ```
     
     **Returns:**
     ```json
@@ -97,7 +103,7 @@ async def initialize_payment(
         online_payment_service = services["online_payment"]
         
         # Verify user is parent
-        if current_user.role != "parent":
+        if current_user.role != UserRole.PARENT:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only parents can initiate payments"
@@ -106,13 +112,17 @@ async def initialize_payment(
         # Get parent's email from user context
         parent_email = current_user.email
         
+        # Use fee_id as provided
+        fee_id = request_data.fee_id
+        
         # Initiate payment
         result = await online_payment_service.initiate_payment(
             session=session,
             fee_id=fee_id,
             parent_id=current_user.id,
             parent_email=parent_email,
-            school_id=current_user.school_id
+            school_id=current_user.school_id,
+            amount_to_pay=request_data.amount_to_pay
         )
         
         if not result["success"]:
@@ -289,7 +299,7 @@ async def get_transaction_status(
             )
         
         # Verify authorization (parent can only see their own)
-        if current_user.role == "parent" and transaction.parent_id != current_user.id:
+        if current_user.role == UserRole.PARENT and transaction.parent_id != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to view this transaction"
@@ -376,9 +386,9 @@ async def list_transactions(
         )
         
         # Filter by role
-        if current_user.role == "parent":
+        if current_user.role == UserRole.PARENT:
             query = query.where(OnlineTransaction.parent_id == current_user.id)
-        elif current_user.role not in ["admin", "accountant"]:
+        elif current_user.role not in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Insufficient permissions"

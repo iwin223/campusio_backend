@@ -43,6 +43,7 @@ from routers.teacher.attendance import router as teacher_attendance_router
 from routers.teacher.timetable import router as teacher_timetable_router
 from routers.teacher.assignments import router as teacher_assignments_router
 from routers.teacher_dashboard import router as teacher_dashboard_router
+from routers.settlements import router as settlements_router
 
 # Configure logging
 logging.basicConfig(
@@ -110,6 +111,7 @@ app.include_router(expenses_router, prefix="/api")
 app.include_router(reports_router, prefix="/api")
 app.include_router(finance_reports_router)
 app.include_router(payments_router, prefix="/api")
+app.include_router(settlements_router, prefix="/api")
 app.include_router(teacher_grades_router, prefix="/api")
 app.include_router(teacher_attendance_router, prefix="/api")
 app.include_router(teacher_timetable_router, prefix="/api")

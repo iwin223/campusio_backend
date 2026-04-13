@@ -29,7 +29,8 @@ class OnlinePaymentService:
         fee_id: str,
         parent_id: str,
         parent_email: str,
-        school_id: str
+        school_id: str,
+        amount_to_pay: Optional[float] = None
     ) -> Dict:
         """
         Initiate online payment for a fee
@@ -58,6 +59,16 @@ class OnlinePaymentService:
             if amount_due <= 0:
                 return {"success": False, "error": "No amount due"}
             
+            # Use custom amount if provided, otherwise use full balance
+            if amount_to_pay is not None:
+                if amount_to_pay <= 0:
+                    return {"success": False, "error": "Payment amount must be greater than zero"}
+                if amount_to_pay > amount_due:
+                    return {"success": False, "error": f"Payment amount cannot exceed outstanding balance of GHS {amount_due}"}
+                payment_amount = amount_to_pay
+            else:
+                payment_amount = amount_due
+            
             # Create transaction record
             transaction_id = f"TXN-{uuid.uuid4().hex[:12].upper()}"
             
@@ -66,7 +77,7 @@ class OnlinePaymentService:
                 fee_id=fee_id,
                 student_id=fee.student_id,
                 parent_id=parent_id,
-                amount=amount_due,
+                amount=payment_amount,
                 gateway="paystack",
                 reference=transaction_id,
                 status=TransactionStatus.PENDING
@@ -76,11 +87,12 @@ class OnlinePaymentService:
             await session.flush()  # Get the ID
             
             # Call Paystack API
-            amount_kobo = int(amount_due * 100)  # Convert GHS to kobo
+            amount_kobo = int(payment_amount * 100)  # Convert GHS to kobo
             metadata = {
                 "fee_id": fee_id,
                 "student_id": fee.student_id,
-                "transaction_id": transaction_id
+                "transaction_id": transaction_id,
+                "is_partial": amount_to_pay is not None
             }
             
             paystack_result = await self.paystack.initialize_payment(
@@ -107,7 +119,7 @@ class OnlinePaymentService:
                     "transaction_id": transaction_id,
                     "payment_url": paystack_result["authorization_url"],
                     "reference": paystack_result["reference"],
-                    "amount": amount_due
+                    "amount": payment_amount
                 }
             else:
                 transaction.status = TransactionStatus.FAILED
