@@ -437,13 +437,9 @@ async def get_admin_otp_settings_endpoint(
     Only Super Admin and School Admin can access
     """
     # Get the school_id from current user
+    # Super admin manages all schools, so school_id is None
+    # School admin manages their specific school
     school_id = current_user.school_id if current_user.role == UserRole.SCHOOL_ADMIN else None
-    
-    if not school_id and current_user.role == UserRole.SUPER_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="School ID not set for super admin"
-        )
     
     settings = await get_admin_otp_settings(session, school_id)
     
@@ -478,13 +474,9 @@ async def update_admin_otp_settings(
     Only Super Admin and School Admin can update
     """
     # Get the school_id from current user
+    # Super admin manages all schools, so school_id is None
+    # School admin manages their specific school
     school_id = current_user.school_id if current_user.role == UserRole.SCHOOL_ADMIN else None
-    
-    if not school_id and current_user.role == UserRole.SUPER_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="School ID not set for super admin"
-        )
     
     try:
         settings = await create_or_update_admin_otp_settings(

@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_
 from datetime import datetime
 from typing import Optional
 from models.classroom import Class, ClassCreate, ClassLevel, Subject, SubjectCreate, SubjectCategory, ClassSubject
@@ -22,7 +23,7 @@ async def create_class(
 ):
     """Create a new class"""
     school_id = current_user.school_id
-    if not school_id:
+    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=400, detail="No school context")
     
     cls = Class(school_id=school_id, **class_data.model_dump())
@@ -268,7 +269,7 @@ async def create_subject(
 ):
     """Create a new subject"""
     school_id = current_user.school_id
-    if not school_id:
+    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=400, detail="No school context")
     
     subject = Subject(school_id=school_id, **subject_data.model_dump())
@@ -299,7 +300,9 @@ async def list_subjects(
     if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="No school context")
     
-    query = select(Subject).where(Subject.school_id == school_id, Subject.is_active == True)
+    query = select(Subject).where(
+        and_(Subject.school_id == school_id, Subject.is_active == True)
+    )
     
     if category:
         query = query.where(Subject.category == category)

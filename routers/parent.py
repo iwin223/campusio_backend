@@ -405,8 +405,9 @@ async def get_child_fees(
                     fees.append(new_fee)
                     print(f"FEE CREATED IN DB: {structure.fee_type} - GHS {structure.amount}", file=sys.stderr)
             
-            # Flush to ensure fees are persisted and have IDs
+            # Flush and commit to ensure fees are persisted to database
             await session.flush()
+            await session.commit()
     
     print(f"TOTAL FEES READY: {len(fees)} fees", file=sys.stderr)
     
@@ -430,10 +431,11 @@ async def get_child_fees(
     fees_list = []
     total_due = 0
     total_paid = 0
+    total_discount = 0
     
     for fee in fees:
         structure = structures.get(fee.fee_structure_id)
-        fee_payments = [p for p in payments if p.fee_id == fee.id or p.fee_structure_id == fee.fee_structure_id]
+        fee_payments = [p for p in payments if p.fee_id == fee.id]
         
         # Calculate actual amount paid from payments
         actual_paid = sum(p.amount for p in fee_payments) if fee_payments else fee.amount_paid
@@ -465,8 +467,9 @@ async def get_child_fees(
         })
         total_due += fee.amount_due
         total_paid += actual_paid
+        total_discount += fee.discount
     
-    print(f"RESPONSE: {len(fees_list)} fees. Total due: GHS {total_due}, Total paid: GHS {total_paid}", file=sys.stderr)
+    print(f"RESPONSE: {len(fees_list)} fees. Total due: GHS {total_due}, Total paid: GHS {total_paid}, Total discount: GHS {total_discount}", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
     
     return {
@@ -474,7 +477,8 @@ async def get_child_fees(
         "summary": {
             "total_due": total_due,
             "total_paid": total_paid,
-            "balance": max(0, total_due - total_paid),
+            "total_discount": total_discount,
+            "balance": max(0, total_due - total_paid - total_discount),
             "collection_rate": round((total_paid / total_due * 100) if total_due > 0 else 100, 1)
         },
         "fees": fees_list

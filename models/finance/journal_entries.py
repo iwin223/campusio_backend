@@ -32,6 +32,7 @@ class ReferenceType(str, Enum):
     DEPRECIATION = "depreciation"         # Period depreciation posting
     PERIOD_CLOSING = "period_closing"     # Year-end or period close
     BANK_RECONCILIATION = "bank_reconciliation"  # Bank clearing
+    PLATFORM_SUBSCRIPTION = "platform_subscription"  # Platform usage fee
 
 
 class JournalEntry(SQLModel, table=True):

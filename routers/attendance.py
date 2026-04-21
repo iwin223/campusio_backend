@@ -22,7 +22,7 @@ async def record_attendance(
 ):
     """Record attendance for a student"""
     school_id = current_user.school_id
-    if not school_id:
+    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="No school context")
     
     existing = await session.execute(
@@ -61,16 +61,23 @@ async def record_bulk_attendance(
 ):
     """Record attendance for multiple students"""
     school_id = current_user.school_id
-    if not school_id:
+    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="No school context")
+    
+    # For super admin, school_id must come from bulk_data
+    if current_user.role == UserRole.SUPER_ADMIN and not school_id:
+        if not hasattr(bulk_data, 'school_id') or not bulk_data.school_id:
+            raise HTTPException(status_code=400, detail="school_id required for super admin")
+        school_id = bulk_data.school_id
     
     recorded = 0
     skipped = 0
     
     for record in bulk_data.records:
+        query_filters = [Attendance.school_id == school_id] if school_id else []
         existing = await session.execute(
             select(Attendance).where(
-                Attendance.school_id == school_id,
+                *query_filters,
                 Attendance.student_id == record.get("student_id"),
                 Attendance.attendance_date == bulk_data.attendance_date
             )
@@ -110,7 +117,7 @@ async def get_class_attendance(
 ):
     """Get attendance for a class on a specific date"""
     school_id = current_user.school_id
-    if not school_id:
+    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="No school context")
     
     class_result = await session.execute(select(Class).where(Class.id == class_id))

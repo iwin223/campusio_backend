@@ -55,6 +55,8 @@ class PaystackService:
             "metadata": metadata or {}
         }
         
+        logger.info(f"Paystack request - Amount: {amount_kobo}, Email: {email}, Ref: {reference}")
+        
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -74,10 +76,13 @@ class PaystackService:
                         "reference": data["data"]["reference"]
                     }
                 else:
-                    logger.error(f"Paystack initialize failed: {response.text}")
+                    error_data = response.json()
+                    error_msg = error_data.get("message", "Payment initialization failed")
+                    logger.error(f"Paystack initialize failed (status {response.status_code}): {error_msg}")
+                    logger.error(f"Full response: {response.text}")
                     return {
                         "success": False,
-                        "error": response.json().get("message", "Payment initialization failed")
+                        "error": error_msg
                     }
         
         except Exception as e:

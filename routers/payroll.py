@@ -23,6 +23,7 @@ from models.payroll import (
 )
 from models.staff import Staff, StaffStatus
 from models.user import User, UserRole
+from models.school import School
 from database import get_session
 from auth import get_current_user, require_roles
 from services.payroll_service import PayrollService
@@ -558,9 +559,16 @@ async def get_payslip(
     )
     staff = staff_result.scalar_one_or_none()
     
+    # Get school name
+    school_result = await session.execute(
+        select(School).where(School.id == run.school_id)
+    )
+    school = school_result.scalar_one_or_none()
+    
     return {
         "payroll_run_id": run.id,
         "period_name": run.period_name,
+        "school_name": school.name if school else "School",
         "staff_id": staff_id,
         "staff_name": f"{staff.first_name} {staff.last_name}" if staff else "Unknown",
         "basic_salary": line_item.basic_salary,

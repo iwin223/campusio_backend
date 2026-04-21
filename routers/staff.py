@@ -91,7 +91,7 @@ async def create_staff(
 ):
     """Create a new staff member"""
     school_id = current_user.school_id
-    if not school_id:
+    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=400, detail="No school context")
     
     result = await session.execute(

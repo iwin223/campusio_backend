@@ -55,12 +55,13 @@ class WithdrawalResponse(BaseModel):
 @router.get("/balance", status_code=200)
 async def get_balance(
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session),
     settlement_service: SettlementService = Depends(get_settlement_service)
 ) -> dict:
     """
-    Get current Paystack account balance
+    Get school's settlement balance from transaction history
     
-    **Auth Required:** Admin or Finance role
+    **Auth Required:** School Admin or Finance role (school-scoped)
     
     **Returns:**
     ```json
@@ -68,24 +69,38 @@ async def get_balance(
         "success": true,
         "balance": 50000.00,
         "currency": "GHS",
-        "message": "Current balance available for withdrawal"
+        "school_id": "school_123",
+        "message": "Balance calculated from transaction history"
     }
     ```
+    
+    **Note:** Balance = (Fee Payments + Online Payments) - (Completed + Pending Withdrawals)
     """
     try:
-        result = await settlement_service.get_balance()
+        if not current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No school context"
+            )
         
-        if result["success"]:
-            logger.info(f"Balance fetched by {current_user.email}: GHS {result['balance']}")
-        
-        return result
-    
-    except ValueError as e:
-        logger.error(f"Configuration error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Payment system not configured"
+        # Calculate balance from database (school-scoped)
+        balance = await settlement_service.calculate_school_balance(
+            session=session,
+            school_id=current_user.school_id
         )
+        
+        logger.info(f"Balance fetched by {current_user.email} for school {current_user.school_id}: GHS {balance}")
+        
+        return {
+            "success": True,
+            "balance": balance,
+            "currency": "GHS",
+            "school_id": current_user.school_id,
+            "message": "Balance calculated from transaction history"
+        }
+    
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting balance: {str(e)}")
         raise HTTPException(

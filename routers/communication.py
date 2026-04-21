@@ -24,7 +24,7 @@ async def create_announcement(
 ):
     """Create an announcement"""
     school_id = current_user.school_id
-    if not school_id:
+    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="No school context")
     
     announcement = Announcement(

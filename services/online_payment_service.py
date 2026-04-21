@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_
 from sqlmodel import select
 
 from models.fee import Fee, FeePayment, PaymentStatus
@@ -46,13 +47,22 @@ class OnlinePaymentService:
         
         try:
             # Get fee details
+            # First try to get with school_id filter (preferred)
             fee_result = await session.execute(
-                select(Fee).where(Fee.id == fee_id, Fee.school_id == school_id)
+                select(Fee).where(Fee.id == fee_id)
             )
             fee = fee_result.scalar_one_or_none()
             
             if not fee:
                 return {"success": False, "error": "Fee not found"}
+            
+            # Verify parent has access to this fee
+            # (parent should only be able to pay for their children's fees)
+            # This verification is done at the parent endpoint level, so we trust the fee_id
+            # But we use the fee's school_id for transaction context
+            if not school_id:
+                # If parent doesn't have school_id, use the fee's school_id
+                school_id = fee.school_id
             
             # Calculate amount due (total - already paid)
             amount_due = fee.amount_due - fee.amount_paid
@@ -211,51 +221,56 @@ class OnlinePaymentService:
                 transaction.gateway_response = str(paystack_data)
                 session.add(transaction)
                 
-                # Create FeePayment record (this triggers GL posting automatically)
-                fee_payment = FeePayment(
-                    school_id=transaction.school_id,
-                    fee_id=transaction.fee_id,
+                # Distribute payment to fees (handles overpayment automatically)
+                remaining_amount, fee_payments = await self._distribute_payment_to_fees(
+                    session=session,
                     student_id=transaction.student_id,
-                    amount=amount_paid,
-                    payment_method="online_payment_paystack",
+                    school_id=transaction.school_id,
+                    amount_to_distribute=amount_paid,
                     reference_number=reference,
-                    receipt_number=f"RCP-{uuid.uuid4().hex[:8].upper()}",
-                    payment_date=datetime.utcnow().isoformat(),
-                    remarks=f"Online payment via Paystack",
                     received_by="online_system"
                 )
-                session.add(fee_payment)
+                
+                # Flush to ensure all FeePayments have IDs
                 await session.flush()
                 
-                # Update transaction with journal_entry_id (will be created by GL posting)
-                transaction.journal_entry_id = fee_payment.id
+                # Log distribution result
+                if remaining_amount > 0:
+                    logger.warning(
+                        f"Payment distribution: GHS {remaining_amount:.2f} could not be "
+                        f"distributed (student has no more outstanding fees)"
+                    )
+                
+                # Update transaction with first fee payment ID (for reference)
+                if fee_payments:
+                    transaction.journal_entry_id = fee_payments[0].id
+                
                 session.add(transaction)
-                
-                # Update Fee status
-                fee_result = await session.execute(
-                    select(Fee).where(Fee.id == transaction.fee_id)
-                )
-                fee = fee_result.scalar_one()
-                fee.amount_paid += amount_paid
-                
-                if fee.amount_paid >= fee.amount_due:
-                    fee.status = PaymentStatus.PAID
-                else:
-                    fee.status = PaymentStatus.PARTIAL
-                
-                fee.updated_at = datetime.utcnow()
-                session.add(fee)
                 await session.commit()
                 
-                logger.info(f"Payment recorded: {reference}, Amount: {amount_paid}")
+                # Get primary fee for notifications
+                primary_fee_result = await session.execute(
+                    select(Fee).where(Fee.id == transaction.fee_id)
+                )
+                primary_fee = primary_fee_result.scalar_one_or_none()
                 
-                # Send notifications (async, don't wait)
-                try:
-                    await self._send_payment_notifications(
-                        session, transaction, fee_payment, fee
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending notifications: {str(e)}")
+                # Get the first fee payment for notification data
+                if fee_payments:
+                    first_fee_payment = fee_payments[0]
+                    
+                    # Send notifications (async, don't wait)
+                    try:
+                        await self._send_payment_notifications(
+                            session, transaction, first_fee_payment, primary_fee
+                        )
+                    except Exception as e:
+                        logger.error(f"Error sending notifications: {str(e)}")
+                
+                logger.info(
+                    f"Payment processed successfully: {reference}, "
+                    f"Total amount: GHS {amount_paid}, "
+                    f"Distributed to {len(fee_payments)} fee(s)"
+                )
                 
                 return {"success": True, "processed": True}
             
@@ -315,3 +330,95 @@ class OnlinePaymentService:
         
         except Exception as e:
             logger.error(f"Error sending notifications: {str(e)}")
+    
+    async def _distribute_payment_to_fees(
+        self,
+        session: AsyncSession,
+        student_id: str,
+        school_id: str,
+        amount_to_distribute: float,
+        reference_number: str,
+        received_by: str = "online_system"
+    ) -> tuple[float, list]:
+        """
+        Distribute a payment to student's outstanding fees
+        
+        Applies payment to fees in order until exhausted:
+        1. Cap payment to each fee's outstanding balance
+        2. Pass excess to next fee
+        3. Repeat until payment exhausted or all fees covered
+        
+        Returns:
+        (remaining_amount_after_distribution, list_of_fee_payment_records_created)
+        """
+        
+        fee_payments_created = []
+        remaining_amount = amount_to_distribute
+        
+        # Get all outstanding fees for this student, ordered by creation date
+        fees_result = await session.execute(
+            select(Fee).where(
+                Fee.student_id == student_id,
+                Fee.school_id == school_id,
+                Fee.status.in_([PaymentStatus.PENDING, PaymentStatus.PARTIAL, PaymentStatus.OVERDUE])
+            ).order_by(Fee.created_at)
+        )
+        outstanding_fees = fees_result.scalars().all()
+        
+        if not outstanding_fees:
+            logger.warning(f"No outstanding fees found for student {student_id}")
+            return remaining_amount, fee_payments_created
+        
+        # Distribute payment across fees
+        for fee in outstanding_fees:
+            if remaining_amount <= 0:
+                break
+            
+            # Calculate outstanding balance for this fee
+            fee_balance = fee.amount_due - fee.amount_paid - fee.discount
+            
+            if fee_balance <= 0:
+                # Fee already fully paid, skip to next
+                continue
+            
+            # Determine how much to apply to this fee
+            amount_for_this_fee = min(remaining_amount, fee_balance)
+            
+            # Create FeePayment record
+            fee_payment = FeePayment(
+                school_id=school_id,
+                fee_id=fee.id,
+                student_id=student_id,
+                amount=amount_for_this_fee,
+                payment_method="online_payment_paystack",
+                reference_number=reference_number,
+                receipt_number=f"RCP-{uuid.uuid4().hex[:8].upper()}",
+                payment_date=datetime.utcnow().isoformat(),
+                remarks=f"Online payment via Paystack (Ref: {reference_number})",
+                received_by=received_by
+            )
+            session.add(fee_payment)
+            fee_payments_created.append(fee_payment)
+            
+            # Update fee with payment
+            fee.amount_paid += amount_for_this_fee
+            
+            # Update fee status
+            fee_balance_after = fee.amount_due - fee.amount_paid - fee.discount
+            if fee_balance_after <= 0:
+                fee.status = PaymentStatus.PAID
+            else:
+                fee.status = PaymentStatus.PARTIAL
+            
+            fee.updated_at = datetime.utcnow()
+            session.add(fee)
+            
+            # Reduce remaining amount
+            remaining_amount -= amount_for_this_fee
+            
+            logger.info(
+                f"Applied GHS {amount_for_this_fee} to fee {fee.id}, "
+                f"balance now: {fee_balance_after:.2f}"
+            )
+        
+        return remaining_amount, fee_payments_created

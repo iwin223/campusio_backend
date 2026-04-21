@@ -4,11 +4,13 @@ import uuid
 from datetime import datetime
 from typing import Dict, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import String, cast
+from sqlalchemy import String, cast, func
 from sqlmodel import select
 
 from services.paystack_service import PaystackService
 from models.payment import OnlineTransaction, TransactionStatus
+from models.settlement import Withdrawal, WithdrawalStatus
+from models.fee import FeePayment
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +206,20 @@ class SettlementService:
                     "error": transfer_result.get("error", "Transfer initiation failed")
                 }
             
+            # Save withdrawal to database
+            withdrawal = Withdrawal(
+                school_id=school_id,
+                amount=amount,
+                momo_number=momo_number,
+                recipient_name=recipient_name,
+                transfer_code=transfer_code,
+                recipient_code=recipient_code,
+                status=WithdrawalStatus.PENDING,
+                initiated_by=initiated_by
+            )
+            session.add(withdrawal)
+            await session.commit()
+            
             logger.info(f"Withdrawal initiated: {transfer_code} - GHS {amount} to {momo_number}")
             
             return {
@@ -288,18 +304,36 @@ class SettlementService:
         limit: int = 20
     ) -> Dict:
         """
-        Get historical withdrawals for this school
+        Get historical withdrawals for this school from database
         
-        Currently returns empty as we need a Withdrawal model
-        This will be enhanced with database storage
+        Returns structured withdrawal history sorted by date
         """
         try:
-            # TODO: Create Withdrawal model to track all withdrawals
-            # For now, return structure
+            query = select(Withdrawal).where(
+                Withdrawal.school_id == school_id
+            ).order_by(Withdrawal.initiated_at.desc()).limit(limit)
+            
+            result = await session.execute(query)
+            withdrawals = result.scalars().all()
+            
+            withdrawal_list = []
+            for w in withdrawals:
+                withdrawal_list.append({
+                    "id": w.id,
+                    "transfer_code": w.transfer_code,
+                    "amount": float(w.amount),
+                    "momo_number": w.momo_number,
+                    "status": w.status,
+                    "initiated_at": w.initiated_at.isoformat(),
+                    "completed_at": w.completed_at.isoformat() if w.completed_at else None
+                })
+            
+            logger.info(f"Fetched {len(withdrawal_list)} withdrawals for school {school_id}")
+            
             return {
                 "success": True,
-                "count": 0,
-                "withdrawals": []
+                "count": len(withdrawal_list),
+                "withdrawals": withdrawal_list
             }
         
         except Exception as e:
@@ -309,6 +343,65 @@ class SettlementService:
                 "count": 0,
                 "withdrawals": []
             }
+    
+    async def calculate_school_balance(
+        self,
+        session: AsyncSession,
+        school_id: str
+    ) -> float:
+        """
+        Calculate school's settlement balance from database
+        
+        Formula: Total Payments In - Total Withdrawals
+        
+        Args:
+            session: Database session
+            school_id: School ID
+        
+        Returns:
+            float: Balance in GHS (can be negative if over-withdrawn)
+        """
+        try:
+            # Get total collected from manual fee payments
+            fee_payment_result = await session.execute(
+                select(func.sum(FeePayment.amount)).where(
+                    FeePayment.school_id == school_id
+                )
+            )
+            total_fee_payments = fee_payment_result.scalar() or 0
+            
+            # Get total collected from online payments
+            online_result = await session.execute(
+                select(func.sum(OnlineTransaction.amount_paid)).where(
+                    OnlineTransaction.school_id == school_id,
+                    cast(OnlineTransaction.status, String) == "SUCCESS"
+                )
+            )
+            total_online_payments = online_result.scalar() or 0
+            
+            # Get total withdrawn (completed + pending withdrawals count as out)
+            withdrawal_result = await session.execute(
+                select(func.sum(Withdrawal.amount)).where(
+                    Withdrawal.school_id == school_id,
+                    Withdrawal.status.in_([WithdrawalStatus.COMPLETED, WithdrawalStatus.PENDING])
+                )
+            )
+            total_withdrawn = withdrawal_result.scalar() or 0
+            
+            # Calculate balance
+            total_collected = float(total_fee_payments) + float(total_online_payments)
+            balance = total_collected - float(total_withdrawn)
+            
+            logger.info(
+                f"Balance calculation for {school_id}: "
+                f"Collected={total_collected}, Withdrawn={total_withdrawn}, Balance={balance}"
+            )
+            
+            return balance
+        
+        except Exception as e:
+            logger.error(f"Error calculating school balance: {str(e)}")
+            return 0.0
     
     async def verify_transfer_status(
         self,

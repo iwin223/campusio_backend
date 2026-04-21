@@ -1,12 +1,14 @@
 """Grades and Report Cards router"""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlmodel import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_
 from datetime import datetime
 from typing import Optional, List
 from io import BytesIO
 import logging
+import zipfile
 
 logger = logging.getLogger(__name__)
 from models.grade import Grade, GradeCreate, AssessmentType, GradeScale, ReportCard
@@ -21,6 +23,27 @@ from auth import get_current_user, require_roles
 from services.report_card_pdf_service import ReportCardPDFService
 
 router = APIRouter(prefix="/grades", tags=["Grades & Report Cards"])
+
+
+# ============ TEMPLATE HELPER FUNCTIONS ============
+async def get_school_template(session: AsyncSession, school_id: str) -> Optional[str]:
+    """
+    Fetch school's default report template from database.
+    Returns None if no template exists (will use file-based fallback).
+    """
+    try:
+        result = await session.execute(
+            select(ReportTemplate).where(
+                ReportTemplate.school_id == school_id,
+                ReportTemplate.is_default == True,
+                ReportTemplate.is_active == True
+            )
+        )
+        template = result.scalar_one_or_none()
+        return template.html_content if template else None
+    except Exception as e:
+        logger.warning(f"Failed to fetch template for school {school_id}: {str(e)}")
+        return None  # Fallback to file-based template
 
 
 # GES Grading Scale
@@ -250,7 +273,9 @@ async def get_subjects(
         raise HTTPException(status_code=403, detail="No school context")
     
     result = await session.execute(
-        select(Subject).where(Subject.school_id == school_id, Subject.is_active == True)
+        select(Subject).where(
+            and_(Subject.school_id == school_id, Subject.is_active == True)
+        )
         .order_by(Subject.category, Subject.name)
     )
     subjects = result.scalars().all()
@@ -369,8 +394,9 @@ async def get_class_grades(
     
     # Get students in class
     students_result = await session.execute(
-        select(Student).where(Student.class_id == class_id, Student.status == "active")
-        .order_by(Student.last_name, Student.first_name)
+        select(Student).where(
+            and_(Student.class_id == class_id, Student.status == "active")
+        ).order_by(Student.last_name, Student.first_name)
     )
     students = students_result.scalars().all()
     
@@ -787,10 +813,11 @@ async def preview_report_card_html(
         academic_term_name=None
     )
     
-    # Always use default file template (not custom database templates)
+    # Fetch school's custom template (or use file fallback)
+    custom_template = await get_school_template(session, student.school_id)
     pdf_service = ReportCardPDFService()
     try:
-        html_content = pdf_service.render_html(report_data, template_html=None)
+        html_content = pdf_service.render_html(report_data, template_html=custom_template)
     except Exception as e:
         error_msg = str(e)
         raise HTTPException(status_code=500, detail=f"Failed to render report card: {error_msg}")
@@ -828,7 +855,9 @@ async def download_report_card_pdf(
     if current_user.role == UserRole.PARENT:
         # Parent can only view their own children
         student_parent_result = await session.execute(
-            select(StudentParent).where(StudentParent.parent_id == current_user.id, StudentParent.student_id == student_id)
+            select(StudentParent).where(
+                and_(StudentParent.parent_id == current_user.id, StudentParent.student_id == student_id)
+            )
         ) 
         result = student_parent_result.scalar_one_or_none() 
         if result: 
@@ -898,10 +927,11 @@ async def download_report_card_pdf(
         academic_term_name=term_name
     )
     
-    # Always use default file template (not custom database templates)
+    # Fetch school's custom template (or use file fallback)
+    custom_template = await get_school_template(session, student.school_id)
     pdf_service = ReportCardPDFService()
     try:
-        pdf_bytes = pdf_service.generate_pdf(report_data, template_html=None)
+        pdf_bytes = pdf_service.generate_pdf(report_data, template_html=custom_template)
         if not pdf_bytes or len(pdf_bytes) == 0:
             raise HTTPException(status_code=500, detail="PDF generation produced empty output")
     except Exception as e:
@@ -994,4 +1024,331 @@ async def regenerate_report_card_pdf(
         "message": "Report card ready for PDF download",
         "download_url": f"/api/grades/report-cards/{student_id}/{academic_term_id}/download"
     }
+
+
+# ============ BULK REPORT ENDPOINTS ============
+
+@router.get("/report-cards/bulk-preview")
+async def bulk_preview_report_cards(
+    class_id: str = Query(..., description="Class ID"),
+    term_id: str = Query(..., description="Academic Term ID"),
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.TEACHER)),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Generate HTML previews for all students in a class for a given academic term.
+    Returns array of student report cards with HTML content for bulk preview.
+    """
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+    
+    # Verify class belongs to user's school
+    class_result = await session.execute(select(Class).where(Class.id == class_id))
+    class_obj = class_result.scalar_one_or_none()
+    
+    if not class_obj or class_obj.school_id != school_id:
+        raise HTTPException(status_code=404, detail="Class not found")
+    
+    # Verify academic term exists
+    term_result = await session.execute(select(AcademicTerm).where(AcademicTerm.id == term_id))
+    academic_term = term_result.scalar_one_or_none()
+    
+    if not academic_term:
+        raise HTTPException(status_code=404, detail="Academic term not found")
+    
+    # Get all students in the class
+    students_result = await session.execute(
+        select(Student).where(Student.class_id == class_id)
+    )
+    students = students_result.scalars().all()
+    
+    if not students:
+        raise HTTPException(status_code=404, detail="No students found in this class")
+    
+    # Get school name
+    school_result = await session.execute(select(School).where(School.id == school_id))
+    school = school_result.scalar_one_or_none()
+    school_name = school.name if school else "School Name"
+    
+    # Generate previews for each student
+    student_reports = []
+    pdf_service = ReportCardPDFService()
+    custom_template = await get_school_template(session, school_id)
+    
+    for student in students:
+        try:
+            # Get grades for this student in this term
+            grades_result = await session.execute(
+                select(Grade).where(
+                    Grade.student_id == student.id,
+                    Grade.academic_term_id == term_id
+                )
+            )
+            grades = grades_result.scalars().all()
+            
+            # Get report card or create one
+            report_card_result = await session.execute(
+                select(ReportCard).where(
+                    ReportCard.student_id == student.id,
+                    ReportCard.academic_term_id == term_id
+                )
+            )
+            report_card = report_card_result.scalar_one_or_none()
+            
+            # Auto-generate report card if it doesn't exist
+            if not report_card:
+                total_score = sum(g.score for g in grades) if grades else 0
+                total_max = sum(g.max_score for g in grades) if grades else 0
+                average_score = (total_score / total_max * 100) if total_max > 0 else 0
+                
+                # Get class size
+                class_count_result = await session.execute(
+                    select(func.count(Student.id)).where(Student.class_id == class_id)
+                )
+                class_size = class_count_result.scalar() or 0
+                
+                # Get attendance percentage
+                attendance_result = await session.execute(
+                    select(Attendance).where(Attendance.student_id == student.id)
+                )
+                attendance_records = attendance_result.scalars().all()
+                total_days = len(attendance_records)
+                present_days = sum(1 for a in attendance_records if a.status in [AttendanceStatus.PRESENT, AttendanceStatus.LATE])
+                attendance_percentage = round(present_days / total_days * 100, 1) if total_days > 0 else 0
+                
+                report_card = ReportCard(
+                    school_id=school_id,
+                    student_id=student.id,
+                    class_id=class_id,
+                    academic_term_id=term_id,
+                    total_score=total_score,
+                    average_score=average_score,
+                    class_size=class_size,
+                    attendance_percentage=attendance_percentage,
+                    generated_by=current_user.id
+                )
+                session.add(report_card)
+                await session.commit()
+                await session.refresh(report_card)
+            
+            # Get subjects
+            subject_ids = list(set(g.subject_id for g in grades)) if grades else []
+            subject_result = await session.execute(
+                select(Subject).where(Subject.id.in_(subject_ids))
+            )
+            subjects = {s.id: s for s in subject_result.scalars().all()}
+            
+            # Create student data object
+            student_data = {
+                "id": student.id,
+                "student_id": student.student_id,
+                "first_name": student.first_name,
+                "last_name": student.last_name,
+                "school_id": student.school_id,
+                "class_id": student.class_id,
+                "class_name": class_obj.name,
+                "school_name": school_name,
+            }
+            
+            # Format data for rendering
+            report_data = ReportCardPDFService.format_grade_data(
+                report_card=report_card,
+                grades=grades,
+                subjects_map=subjects,
+                student=student_data,
+                academic_term_name=None
+            )
+            
+            # Render HTML
+            html_content = pdf_service.render_html(report_data, template_html=custom_template)
+            
+            student_reports.append({
+                "student_id": student.id,
+                "student_name": f"{student.first_name} {student.last_name}",
+                "student_number": student.student_id,
+                "html": html_content,
+                "report_data": report_data
+            })
+        except Exception as e:
+            logger.error(f"Error generating preview for student {student.id}: {str(e)}")
+            # Continue with next student instead of failing entire bulk operation
+            continue
+    
+    return {
+        "class_id": class_id,
+        "class_name": class_obj.name,
+        "term_id": term_id,
+        "academic_year": academic_term.academic_year,
+        "term": academic_term.term,
+        "total_students": len(students),
+        "students": student_reports
+    }
+
+
+@router.post("/report-cards/bulk-download")
+async def bulk_download_report_cards(
+    request_data: dict,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.TEACHER)),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Download all student report cards for a class/term as a ZIP file.
+    Expects: { class_id, term_id, format: "zip" }
+    """
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+    
+    class_id = request_data.get("class_id")
+    term_id = request_data.get("term_id")
+    
+    if not class_id or not term_id:
+        raise HTTPException(status_code=400, detail="class_id and term_id are required")
+    
+    # Verify class belongs to user's school
+    class_result = await session.execute(select(Class).where(Class.id == class_id))
+    class_obj = class_result.scalar_one_or_none()
+    
+    if not class_obj or class_obj.school_id != school_id:
+        raise HTTPException(status_code=404, detail="Class not found")
+    
+    # Verify academic term exists
+    term_result = await session.execute(select(AcademicTerm).where(AcademicTerm.id == term_id))
+    academic_term = term_result.scalar_one_or_none()
+    
+    if not academic_term:
+        raise HTTPException(status_code=404, detail="Academic term not found")
+    
+    # Get all students in the class
+    students_result = await session.execute(
+        select(Student).where(Student.class_id == class_id)
+    )
+    students = students_result.scalars().all()
+    
+    if not students:
+        raise HTTPException(status_code=404, detail="No students found in this class")
+    
+    # Create ZIP file in memory
+    zip_buffer = BytesIO()
+    pdf_service = ReportCardPDFService()
+    custom_template = await get_school_template(session, school_id)
+    
+    # Get school name
+    school_result = await session.execute(select(School).where(School.id == school_id))
+    school = school_result.scalar_one_or_none()
+    school_name = school.name if school else "School Name"
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        successful_count = 0
+        
+        for student in students:
+            try:
+                # Get grades for this student in this term
+                grades_result = await session.execute(
+                    select(Grade).where(
+                        Grade.student_id == student.id,
+                        Grade.academic_term_id == term_id
+                    )
+                )
+                grades = grades_result.scalars().all()
+                
+                # Get report card
+                report_card_result = await session.execute(
+                    select(ReportCard).where(
+                        ReportCard.student_id == student.id,
+                        ReportCard.academic_term_id == term_id
+                    )
+                )
+                report_card = report_card_result.scalar_one_or_none()
+                
+                # Auto-generate if not exists
+                if not report_card:
+                    total_score = sum(g.score for g in grades) if grades else 0
+                    total_max = sum(g.max_score for g in grades) if grades else 0
+                    average_score = (total_score / total_max * 100) if total_max > 0 else 0
+                    
+                    # Get class size
+                    class_count_result = await session.execute(
+                        select(func.count(Student.id)).where(Student.class_id == class_id)
+                    )
+                    class_size = class_count_result.scalar() or 0
+                    
+                    # Get attendance percentage
+                    attendance_result = await session.execute(
+                        select(Attendance).where(Attendance.student_id == student.id)
+                    )
+                    attendance_records = attendance_result.scalars().all()
+                    total_days = len(attendance_records)
+                    present_days = sum(1 for a in attendance_records if a.status in [AttendanceStatus.PRESENT, AttendanceStatus.LATE])
+                    attendance_percentage = round(present_days / total_days * 100, 1) if total_days > 0 else 0
+                    
+                    report_card = ReportCard(
+                        school_id=school_id,
+                        student_id=student.id,
+                        class_id=class_id,
+                        academic_term_id=term_id,
+                        total_score=total_score,
+                        average_score=average_score,
+                        class_size=class_size,
+                        attendance_percentage=attendance_percentage,
+                        generated_by=current_user.id
+                    )
+                    session.add(report_card)
+                    await session.commit()
+                    await session.refresh(report_card)
+                
+                # Get subjects
+                subject_ids = list(set(g.subject_id for g in grades)) if grades else []
+                subject_result = await session.execute(
+                    select(Subject).where(Subject.id.in_(subject_ids))
+                )
+                subjects = {s.id: s for s in subject_result.scalars().all()}
+                
+                # Create student data
+                student_data = {
+                    "id": student.id,
+                    "student_id": student.student_id,
+                    "first_name": student.first_name,
+                    "last_name": student.last_name,
+                    "school_id": student.school_id,
+                    "class_id": student.class_id,
+                    "class_name": class_obj.name,
+                    "school_name": school_name,
+                }
+                
+                # Format data for PDF
+                report_data = ReportCardPDFService.format_grade_data(
+                    report_card=report_card,
+                    grades=grades,
+                    subjects_map=subjects,
+                    student=student_data,
+                    academic_term_name=academic_term.name if academic_term else None
+                )
+                
+                # Generate PDF
+                pdf_bytes = pdf_service.generate_pdf(report_data, template_html=custom_template)
+                
+                if pdf_bytes and len(pdf_bytes) > 0:
+                    # Add to ZIP with sanitized filename
+                    filename = f"{student.student_id}_{student.first_name}_{student.last_name}.pdf"
+                    zip_file.writestr(filename, pdf_bytes)
+                    successful_count += 1
+            except Exception as e:
+                logger.error(f"Error generating PDF for student {student.id}: {str(e)}")
+                # Continue with next student
+                continue
+        
+        if successful_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to generate any report cards")
+    
+    zip_buffer.seek(0)
+    
+    # Return ZIP file as download
+    filename = f"reportcards_{class_id}_{term_id}.zip"
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 

@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_
 from datetime import datetime
 from typing import Optional, List
 from models.timetable import Timetable, TimetableCreate, Period, PeriodCreate, DayOfWeek, PeriodType
@@ -103,7 +104,11 @@ async def update_period(
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
 
-    result = await session.execute(select(Period).where(Period.id == period_id, Period.school_id == school_id, Period.is_active == True))
+    result = await session.execute(
+        select(Period).where(
+            and_(Period.id == period_id, Period.school_id == school_id, Period.is_active == True)
+        )
+    )
     period = result.scalar_one_or_none()
     if not period:
         raise HTTPException(status_code=404, detail="Period not found")
@@ -140,7 +145,11 @@ async def delete_period(
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
 
-    result = await session.execute(select(Period).where(Period.id == period_id, Period.school_id == school_id, Period.is_active == True))
+    result = await session.execute(
+        select(Period).where(
+            and_(Period.id == period_id, Period.school_id == school_id, Period.is_active == True)
+        )
+    )
     period = result.scalar_one_or_none()
     if not period:
         raise HTTPException(status_code=404, detail="Period not found")

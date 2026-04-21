@@ -26,6 +26,7 @@ from routers.communication import router as communication_router
 from routers.dashboard import router as dashboard_router
 from routers.email import router as email_router
 from routers.sms import router as sms_router
+from routers.tickets import router as tickets_router
 from routers.parent import router as parent_router
 from routers.student_portal import router as student_portal_router
 from routers.report_templates import router as report_templates_router
@@ -44,6 +45,7 @@ from routers.teacher.timetable import router as teacher_timetable_router
 from routers.teacher.assignments import router as teacher_assignments_router
 from routers.teacher_dashboard import router as teacher_dashboard_router
 from routers.settlements import router as settlements_router
+from routers.billing import router as billing_router
 
 # Configure logging
 logging.basicConfig(
@@ -99,6 +101,7 @@ app.include_router(communication_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(email_router, prefix="/api")
 app.include_router(sms_router, prefix="/api")
+app.include_router(tickets_router, prefix="/api")
 app.include_router(parent_router, prefix="/api")
 app.include_router(student_portal_router, prefix="/api")
 app.include_router(report_templates_router, prefix="/api")
@@ -117,6 +120,7 @@ app.include_router(teacher_attendance_router, prefix="/api")
 app.include_router(teacher_timetable_router, prefix="/api")
 app.include_router(teacher_assignments_router, prefix="/api")
 app.include_router(teacher_dashboard_router, prefix="/api")
+app.include_router(billing_router, prefix="/api")
 
 
 @app.get("/api")

@@ -44,6 +44,17 @@ from models.hostel import (
     HostelVisitor, HostelVisitorCreate,
     HostelComplaint, HostelComplaintCreate, HostelComplaintUpdate
 )
+from models.billing import (
+    PlatformSubscription, SubscriptionInvoice, SubscriptionStatus,
+    PlatformSubscriptionResponse, SubscriptionInvoiceResponse,
+    GenerateSubscriptionRequest, ProcessSubscriptionPaymentRequest,
+    SubscriptionMetrics,
+    # Phase 2 Models
+    BillingConfiguration, BillingConfigurationResponse,
+    DiscountRule, PaymentReminder, LateFeeCharge,
+    BillingReport
+)
+from models.settlement import Withdrawal, WithdrawalStatus, WithdrawalRead
 
 __all__ = [
     "User", "UserCreate", "UserLogin", "UserResponse", "UserRole",
@@ -85,5 +96,16 @@ __all__ = [
     "HostelFee", "HostelFeeCreate", "HostelFeeUpdate", "HostelFeeType",
     "HostelMaintenance", "HostelMaintenanceCreate",
     "HostelVisitor", "HostelVisitorCreate",
-    "HostelComplaint", "HostelComplaintCreate", "HostelComplaintUpdate"
+    "HostelComplaint", "HostelComplaintCreate", "HostelComplaintUpdate",
+    # Platform Billing Module
+    "PlatformSubscription", "SubscriptionInvoice", "SubscriptionStatus",
+    "PlatformSubscriptionResponse", "SubscriptionInvoiceResponse",
+    "GenerateSubscriptionRequest", "ProcessSubscriptionPaymentRequest",
+    "SubscriptionMetrics",
+    # Platform Billing Phase 2
+    "BillingConfiguration", "BillingConfigurationResponse",
+    "DiscountRule", "PaymentReminder", "LateFeeCharge",
+    "BillingReport",
+    # Settlement Module
+    "Withdrawal", "WithdrawalStatus", "WithdrawalRead"
 ]

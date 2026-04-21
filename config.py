@@ -25,6 +25,19 @@ class Settings(BaseSettings):
     usms_sender_id: str = "SchoolERP"
     usms_base_url: str = "https://webapp.usmsgh.com"
     
+    # Twilio WhatsApp (optional - can fail gracefully if not configured)
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_whatsapp_number: Optional[str] = None
+    superadmin_whatsapp_phone: Optional[str] = None
+    
+    # Meta Business WhatsApp API (optional - alternative to Twilio)
+    meta_whatsapp_api_token: Optional[str] = None
+    meta_whatsapp_phone_number_id: Optional[str] = None
+    meta_whatsapp_business_account_id: Optional[str] = None
+    meta_whatsapp_sender_phone: Optional[str] = None  # Phone number to send from
+    meta_superadmin_whatsapp_phone: Optional[str] = None  # Recipient phone
+    
     # CORS
     cors_origins: list[str]    
     class Config:

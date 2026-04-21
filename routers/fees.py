@@ -48,12 +48,15 @@ async def get_fee_summary(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get fee collection summary for the school"""
+    """Get fee collection summary for the school (outstanding fees only)"""
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
     
-    query = select(Fee).where(Fee.school_id == school_id)
+    query = select(Fee).where(
+        Fee.school_id == school_id,
+        Fee.status.in_([PaymentStatus.PENDING, PaymentStatus.PARTIAL, PaymentStatus.OVERDUE])
+    )
     if academic_term_id:
         query = query.where(Fee.academic_term_id == academic_term_id)
     
@@ -337,7 +340,7 @@ async def record_payment(
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Record a fee payment"""
+    """Record a fee payment with overpayment distribution"""
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
@@ -350,11 +353,26 @@ async def record_payment(
     
     receipt_number = f"RCP-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
     
-    payment = FeePayment(
+    # Get fee structure for GL posting
+    fee_structure_result = await session.execute(
+        select(FeeStructure).where(FeeStructure.id == fee.fee_structure_id)
+    )
+    fee_structure = fee_structure_result.scalar_one_or_none()
+    
+    payment_amount = payment_data.amount
+    student_id = fee.student_id
+    fee_balance_before = fee.amount_due - fee.amount_paid - fee.discount
+    
+    # Cap payment to outstanding balance to prevent overpayment of this specific fee
+    amount_for_primary_fee = min(payment_amount, fee_balance_before)
+    remaining_amount = payment_amount - amount_for_primary_fee
+    
+    # Record primary fee payment
+    primary_payment = FeePayment(
         school_id=school_id,
         fee_id=payment_data.fee_id,
-        student_id=fee.student_id,
-        amount=payment_data.amount,
+        student_id=student_id,
+        amount=amount_for_primary_fee,
         payment_method=payment_data.payment_method,
         reference_number=payment_data.reference_number,
         receipt_number=receipt_number,
@@ -362,9 +380,10 @@ async def record_payment(
         remarks=payment_data.remarks,
         received_by=current_user.id
     )
-    session.add(payment)
+    session.add(primary_payment)
     
-    fee.amount_paid += payment_data.amount
+    # Update primary fee
+    fee.amount_paid += amount_for_primary_fee
     balance = fee.amount_due - fee.amount_paid - fee.discount
     
     if balance <= 0:
@@ -375,40 +394,106 @@ async def record_payment(
     fee.updated_at = datetime.utcnow()
     session.add(fee)
     
-    # Get FeeStructure to determine fee type for GL account mapping
-    fee_structure_result = await session.execute(
-        select(FeeStructure).where(FeeStructure.id == fee.fee_structure_id)
-    )
-    fee_structure = fee_structure_result.scalar_one_or_none()
-    
-    # Create GL journal entry for fee payment
+    # Create GL journal entry for primary fee payment
     journal_entry_id = None
     try:
         if fee_structure:
             journal_entry_id = await _create_fee_journal_entry(
                 session=session,
                 school_id=school_id,
-                payment=payment,
+                payment=primary_payment,
                 fee=fee,
                 fee_structure=fee_structure,
-                amount=payment_data.amount,
+                amount=amount_for_primary_fee,
             )
-            logger.info(f"Created journal entry {journal_entry_id} for fee payment {payment.id}")
+            logger.info(f"Created journal entry {journal_entry_id} for fee payment {primary_payment.id}")
     except Exception as e:
         logger.error(f"Error creating journal entry for fee payment: {str(e)}")
         # Continue with payment recording even if GL posting fails
     
+    # Distribute excess payment to other outstanding fees
+    additional_payments = []
+    if remaining_amount > 0:
+        logger.info(
+            f"Distributing overpayment of GHS {remaining_amount:.2f} "
+            f"from payment to other outstanding fees"
+        )
+        
+        # Get other outstanding fees for this student
+        other_fees_result = await session.execute(
+            select(Fee).where(
+                Fee.student_id == student_id,
+                Fee.school_id == school_id,
+                Fee.id != payment_data.fee_id,
+                Fee.status.in_([PaymentStatus.PENDING, PaymentStatus.PARTIAL, PaymentStatus.OVERDUE])
+            ).order_by(Fee.created_at)
+        )
+        other_fees = other_fees_result.scalars().all()
+        
+        # Distribute remaining amount to other fees
+        for other_fee in other_fees:
+            if remaining_amount <= 0:
+                break
+            
+            other_fee_balance = other_fee.amount_due - other_fee.amount_paid - other_fee.discount
+            if other_fee_balance <= 0:
+                continue
+            
+            amount_for_other_fee = min(remaining_amount, other_fee_balance)
+            
+            # Create payment record for other fee
+            other_payment = FeePayment(
+                school_id=school_id,
+                fee_id=other_fee.id,
+                student_id=student_id,
+                amount=amount_for_other_fee,
+                payment_method=payment_data.payment_method,
+                reference_number=payment_data.reference_number,
+                receipt_number=f"RCP-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}",
+                payment_date=payment_data.payment_date,
+                remarks=f"{payment_data.remarks} (Overpayment distribution)",
+                received_by=current_user.id
+            )
+            session.add(other_payment)
+            additional_payments.append(other_payment)
+            
+            # Update other fee
+            other_fee.amount_paid += amount_for_other_fee
+            other_fee_balance_after = other_fee.amount_due - other_fee.amount_paid - other_fee.discount
+            
+            if other_fee_balance_after <= 0:
+                other_fee.status = PaymentStatus.PAID
+            else:
+                other_fee.status = PaymentStatus.PARTIAL
+            
+            other_fee.updated_at = datetime.utcnow()
+            session.add(other_fee)
+            
+            remaining_amount -= amount_for_other_fee
+            
+            logger.info(
+                f"Distributed GHS {amount_for_other_fee:.2f} to fee {other_fee.id}, "
+                f"new balance: {other_fee_balance_after:.2f}"
+            )
+    
     await session.commit()
-    await session.refresh(payment)
+    await session.refresh(primary_payment)
     
     response = {
-        "id": payment.id,
+        "id": primary_payment.id,
         "receipt_number": receipt_number,
-        "amount": payment.amount,
+        "amount": payment_amount,
+        "amount_applied_to_primary_fee": amount_for_primary_fee,
         "fee_balance": balance,
         "fee_status": fee.status,
         "message": "Payment recorded successfully"
     }
+    
+    # Add info about overpayment distribution if applicable
+    if additional_payments:
+        response["overpayments_distributed"] = True
+        response["additional_fees_paid_count"] = len(additional_payments)
+        response["message"] = f"Payment recorded. Overpayment of GHS {sum(p.amount for p in additional_payments):.2f} applied to {len(additional_payments)} other fee(s)."
     
     if journal_entry_id:
         response["journal_entry_id"] = journal_entry_id
