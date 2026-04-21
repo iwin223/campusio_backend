@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.middleware.gzip import GZIPMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from config import get_settings
@@ -51,7 +51,7 @@ def register_middleware(app: FastAPI):
     
     # ✅ OPTIMIZATION: Add GZIP compression middleware
     # Reduces response size by 60-80% for JSON responses
-    app.add_middleware(GZIPMiddleware, minimum_size=1000)
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     
     app.add_middleware(
         CORSMiddleware,
