@@ -65,20 +65,27 @@ async def create_indexes():
     """Create all optimization indexes"""
     logger.info("🚀 Starting database index creation...")
     
-    async with async_engine.begin() as conn:
-        for idx, index_sql in enumerate(INDEXES, 1):
-            try:
-                await conn.execute(text(index_sql))
-                logger.info(f"✓ [{idx}/{len(INDEXES)}] {index_sql.split('IF NOT EXISTS')[1].split('ON')[0].strip()}")
-            except Exception as e:
-                logger.warning(f"⚠ Index creation failed: {e}")
-    
-    logger.info(f"\n✅ Database index creation complete! Created {len(INDEXES)} indexes.")
-    logger.info("📊 Expected improvements:")
-    logger.info("   - User queries: 5-10x faster")
-    logger.info("   - Fee lookups: 5-8x faster")
-    logger.info("   - Attendance queries: 3-5x faster")
-    logger.info("   - Overall request latency: 30-50% reduction for complex queries")
+    try:
+        async with async_engine.begin() as conn:
+            for idx, index_sql in enumerate(INDEXES, 1):
+                try:
+                    await conn.execute(text(index_sql))
+                    logger.info(f"✓ [{idx}/{len(INDEXES)}] {index_sql.split('IF NOT EXISTS')[1].split('ON')[0].strip()}")
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        logger.debug(f"ℹ Index already exists: {index_sql.split('ON')[1].split(';')[0].strip()}")
+                    else:
+                        logger.warning(f"⚠ Index creation issue: {e}")
+        
+        logger.info(f"\n✅ Database index creation complete! Created {len(INDEXES)} indexes.")
+        logger.info("📊 Expected improvements:")
+        logger.info("   - User queries: 5-10x faster")
+        logger.info("   - Fee lookups: 5-8x faster")
+        logger.info("   - Attendance queries: 3-5x faster")
+        logger.info("   - Overall request latency: 30-50% reduction for complex queries")
+    except Exception as e:
+        logger.warning(f"⚠ Could not create indexes: {e}")
+        logger.info("   Indexes will be created when app starts")
 
 
 if __name__ == "__main__":

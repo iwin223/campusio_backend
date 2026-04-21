@@ -55,8 +55,21 @@ async def get_session() -> AsyncSession:
 
 # ✅ Initialize DB
 async def init_db() -> None:
-    async with async_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+    """Initialize database: create tables and indexes"""
+    try:
+        logger.info("📦 Creating database tables...")
+        async with async_engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.create_all)
+        logger.info("✅ Database tables created successfully")
+        
+        # Create indexes after tables exist
+        logger.info("🚀 Creating database indexes...")
+        from create_indexes import create_indexes
+        await create_indexes()
+    except Exception as e:
+        logger.error(f"❌ Database initialization error: {e}")
+        raise
+
 
 async def close_db():
     """Close database connections"""
