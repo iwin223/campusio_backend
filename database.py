@@ -23,11 +23,11 @@ logger.info("🚀 Connecting to database... (Render optimized)")
 async_engine = create_async_engine(
     database_url,
     echo=False,
-    poolclass=QueuePool,
-    pool_size=5,               # Smaller for Render free tier (reduced from 20)
-    max_overflow=3,            # Overflow connections (reduced from 10)
-    pool_pre_ping=True,        # Verify connections are alive
-    pool_recycle=3600,         # Recycle connections after 1 hour
+    pool_size=5,
+    max_overflow=3,
+    pool_timeout=30,
+    pool_pre_ping=True,
+    pool_recycle=3600,
     connect_args={
         "timeout": 30,
         "command_timeout": 60,
@@ -35,7 +35,7 @@ async_engine = create_async_engine(
             "application_name": "school_erp_app",
             "jit": "off",
         }
-    } 
+    }
 )
 
 # Create async session factory
