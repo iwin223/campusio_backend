@@ -7,6 +7,10 @@ from sqlalchemy.pool import QueuePool
 from config import get_settings
 import logging
 
+# ✅ CRITICAL: Import all models so they register with SQLModel.metadata
+# This must happen BEFORE create_all() is called
+import models
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 

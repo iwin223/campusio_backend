@@ -55,6 +55,16 @@ from models.billing import (
     BillingReport
 )
 from models.settlement import Withdrawal, WithdrawalStatus, WithdrawalRead
+from models.ticket import (
+    Ticket, TicketCreate, TicketUpdate, TicketResponse, TicketDetailResponse,
+    TicketCategory, TicketPriority, TicketStatus,
+    TicketComment, TicketCommentCreate, TicketCommentResponse,
+    TicketAttachment, TicketNotification, TicketCloseRequest
+)
+from models.otp import (
+    OTP, OTPBase, OTPSettings, OTPVerificationRequest, OTPVerificationResponse,
+    OTPAdminSettings
+)
 
 __all__ = [
     "User", "UserCreate", "UserLogin", "UserResponse", "UserRole",
@@ -107,5 +117,13 @@ __all__ = [
     "DiscountRule", "PaymentReminder", "LateFeeCharge",
     "BillingReport",
     # Settlement Module
-    "Withdrawal", "WithdrawalStatus", "WithdrawalRead"
+    "Withdrawal", "WithdrawalStatus", "WithdrawalRead",
+    # Ticket Module
+    "Ticket", "TicketCreate", "TicketUpdate", "TicketResponse", "TicketDetailResponse",
+    "TicketCategory", "TicketPriority", "TicketStatus",
+    "TicketComment", "TicketCommentCreate", "TicketCommentResponse",
+    "TicketAttachment", "TicketNotification", "TicketCloseRequest",
+    # OTP Module
+    "OTP", "OTPBase", "OTPSettings", "OTPVerificationRequest", "OTPVerificationResponse",
+    "OTPAdminSettings",
 ]
