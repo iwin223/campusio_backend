@@ -132,3 +132,5 @@ websockets==16.0
 yarl==1.23.0
 alembic==1.12.1
 xhtml2pdf==0.2.16
+redis==5.0.1
+aioredis==2.0.1

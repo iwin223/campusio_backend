@@ -9,16 +9,20 @@ class Settings(BaseSettings):
     
     # Database - PostgreSQL
     database_url: str 
-    ALLOWED_HOSTS:list[str]
+    ALLOWED_HOSTS: list[str]
+    
+    # Redis Cache URL (🚀 OPTIMIZATION)
+    redis_url: str 
+    
     # JWT
     secret_key: str 
-    algorithm: str 
-    access_token_expire_minutes: int
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 1440  # 24 hours
     
     # Resend Email
-    resend_api_key: str 
-    resend_from_email: str 
-    resend_from_name: str 
+    resend_api_key: str = ""
+    resend_from_email: str = "noreply@schoolerp.com"
+    resend_from_name: str = "School ERP"
     
     # USMS SMS Service (optional - can fail gracefully if not configured)
     usms_token: Optional[str] = None
@@ -40,6 +44,7 @@ class Settings(BaseSettings):
     
     # CORS
     cors_origins: list[str]    
+    
     class Config:
         env_file = ".env"
         case_sensitive = False

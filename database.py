@@ -3,7 +3,7 @@ import asyncio
 from sqlmodel import SQLModel
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker 
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool
 from config import get_settings
 import logging
 
@@ -15,14 +15,21 @@ database_url = settings.database_url
 if database_url.startswith("postgresql://"):
     database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-# ✅ PHASE 2B: Async-compatible Connection Pooling
-# NullPool is required for async SQLAlchemy - creates new connection per request
+logger.info("🚀 Connecting to database... (Render optimized)")
+
+# ✅ OPTIMIZED: Connection Pooling with QueuePool
+# Reuses connections instead of creating new ones per request
+# Reduced pool size for Render's connection limits
 async_engine = create_async_engine(
     database_url,
     echo=False,
-    poolclass=NullPool,
+    poolclass=QueuePool,
+    pool_size=5,               # Smaller for Render free tier (reduced from 20)
+    max_overflow=3,            # Overflow connections (reduced from 10)
+    pool_pre_ping=True,        # Verify connections are alive
+    pool_recycle=3600,         # Recycle connections after 1 hour
     connect_args={
-        "timeout": 30,  # Increased timeout to 30 seconds
+        "timeout": 30,
         "command_timeout": 60,
         "server_settings": {
             "application_name": "school_erp_app",

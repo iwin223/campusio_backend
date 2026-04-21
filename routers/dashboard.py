@@ -1,7 +1,8 @@
 """Dashboard router - Analytics and Overview"""
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import select, func
+from sqlmodel import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import case
 from datetime import datetime, timezone, date, timedelta
 from models.student import Student, StudentStatus
 from models.staff import Staff, StaffType, StaffStatus
@@ -25,96 +26,97 @@ async def get_dashboard_overview(
     school_id = current_user.school_id
     
     if current_user.role == UserRole.SUPER_ADMIN:
-        schools_result = await session.execute(select(func.count(School.id)))
-        total_schools = schools_result.scalar()
-        
-        students_result = await session.execute(
-            select(func.count(Student.id)).where(Student.status == StudentStatus.ACTIVE)
+        # 🚀 OPTIMIZATION: Combined single query instead of multiple count queries
+        super_admin_stats = await session.execute(
+            select(
+                func.count(func.distinct(School.id)).label("total_schools"),
+                func.count(func.distinct(Student.id)).label("total_students"),
+                func.count(func.distinct(Staff.id)).label("total_staff")
+            )
+            .select_from(School)
+            .outerjoin(Student, Student.school_id == School.id)
+            .outerjoin(Staff, Staff.school_id == School.id)
+            .where(
+                (Student.status == StudentStatus.ACTIVE) | (Student.id == None),
+                (Staff.status == StaffStatus.ACTIVE) | (Staff.id == None)
+            )
         )
-        total_students = students_result.scalar()
-        
-        staff_result = await session.execute(
-            select(func.count(Staff.id)).where(Staff.status == StaffStatus.ACTIVE)
-        )
-        total_staff = staff_result.scalar()
+        row = super_admin_stats.first()
         
         return {
             "role": "super_admin",
             "stats": {
-                "total_schools": total_schools,
-                "total_students": total_students,
-                "total_staff": total_staff
+                "total_schools": row.total_schools or 0,
+                "total_students": row.total_students or 0,
+                "total_staff": row.total_staff or 0
             }
         }
     
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
     
-    students_result = await session.execute(
-        select(func.count(Student.id)).where(
+    # 🚀 OPTIMIZATION: Combined statistics query - avoid multiple database round trips
+    today = date.today().isoformat()
+    
+    stats_result = await session.execute(
+        select(
+            func.count(func.distinct(Student.id)).label("total_students"),
+            func.count(func.distinct(Staff.id)).label("total_staff"),
+            func.count(func.distinct(
+                case(
+                    (Staff.staff_type == StaffType.TEACHING, Staff.id),
+                    else_=None
+                )
+            )).label("total_teachers"),
+            func.count(func.distinct(Class.id)).label("total_classes"),
+            func.count(func.distinct(
+                case(
+                    (Attendance.status == AttendanceStatus.PRESENT, Attendance.id),
+                    else_=None
+                )
+            )).label("present_count"),
+            func.count(func.distinct(
+                case(
+                    (Attendance.status == AttendanceStatus.ABSENT, Attendance.id),
+                    else_=None
+                )
+            )).label("absent_count"),
+            func.sum(Fee.amount_due).label("total_fees"),
+            func.sum(Fee.amount_paid).label("total_fees_collected")
+        )
+        .select_from(Student)
+        .outerjoin(Staff, and_(Staff.school_id == school_id, Staff.status == StaffStatus.ACTIVE))
+        .outerjoin(Class, and_(Class.school_id == school_id, Class.is_active == True))
+        .outerjoin(Attendance, and_(
+            Attendance.school_id == school_id,
+            Attendance.attendance_date == today
+        ))
+        .outerjoin(Fee, Fee.school_id == school_id)
+        .where(
             Student.school_id == school_id,
             Student.status == StudentStatus.ACTIVE
         )
     )
-    total_students = students_result.scalar()
     
-    staff_result = await session.execute(
-        select(func.count(Staff.id)).where(
-            Staff.school_id == school_id,
-            Staff.status == StaffStatus.ACTIVE
-        )
-    )
-    total_staff = staff_result.scalar()
+    row = stats_result.first()
     
-    teachers_result = await session.execute(
-        select(func.count(Staff.id)).where(
-            Staff.school_id == school_id,
-            Staff.staff_type == StaffType.TEACHING,
-            Staff.status == StaffStatus.ACTIVE
-        )
-    )
-    total_teachers = teachers_result.scalar()
-    
-    classes_result = await session.execute(
-        select(func.count(Class.id)).where(
-            Class.school_id == school_id,
-            Class.is_active == True
-        )
-    )
-    total_classes = classes_result.scalar()
-    
-    today = date.today().isoformat()
-    attendance_result = await session.execute(
-        select(Attendance).where(
-            Attendance.school_id == school_id,
-            Attendance.attendance_date == today
-        )
-    )
-    today_attendance = attendance_result.scalars().all()
-    
-    present_count = sum(1 for a in today_attendance if a.status == AttendanceStatus.PRESENT)
-    absent_count = sum(1 for a in today_attendance if a.status == AttendanceStatus.ABSENT)
-    
-    fees_result = await session.execute(
-        select(Fee).where(Fee.school_id == school_id)
-    )
-    fees = fees_result.scalars().all()
-    
-    total_fees = sum(f.amount_due for f in fees)
-    collected = sum(f.amount_paid for f in fees)
+    total_fees = row.total_fees or 0
+    collected = row.total_fees_collected or 0
     outstanding = total_fees - collected
+    present = row.present_count or 0
+    absent = row.absent_count or 0
     
     return {
         "role": current_user.role,
         "stats": {
-            "total_students": total_students,
-            "total_staff": total_staff,
-            "total_teachers": total_teachers,
-            "total_classes": total_classes,
+            "total_students": row.total_students or 0,
+            "total_staff": row.total_staff or 0,
+            "total_teachers": row.total_teachers or 0,
+            "total_classes": row.total_classes or 0,
             "attendance_today": {
-                "present": present_count,
-                "absent": absent_count,
-                "attendance_rate": round(present_count / (present_count + absent_count) * 100, 1) if (present_count + absent_count) > 0 else 0
+                "present": present,
+                "absent": absent,
+                "attendance_rate": round(present / (present + absent) * 100, 1) if (present + absent) > 0 else 0
             },
             "fees": {
                 "total": total_fees,
