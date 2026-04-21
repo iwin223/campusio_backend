@@ -23,7 +23,8 @@ redis==5.0.1
 aioredis==2.0.1 
 pandas 
 jinja2 
-xhtml2pdf
+xhtml2pdf 
+python-bidi
 
 # Environment & Config
 python-dotenv==1.2.1
