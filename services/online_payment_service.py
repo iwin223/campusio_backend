@@ -161,11 +161,37 @@ class OnlinePaymentService:
         """
         
         try:
-            reference = payload.get("reference")
+            # Extract reference from nested structure (data is the wrapper)
+            data = payload.get("data", {})
+            reference = data.get("reference") if isinstance(data, dict) else payload.get("reference")
+            amount = data.get("amount") if isinstance(data, dict) else payload.get("amount")
+            status_val = data.get("status") if isinstance(data, dict) else payload.get("status")
+            customer_email = data.get("customer", {}).get("email") if isinstance(data.get("customer"), dict) else None
+            
+            logger.info(f"Processing webhook - Reference: {reference}, Amount: {amount}, Status: {status_val}, Email: {customer_email}")
             
             if not reference:
-                logger.warning("Webhook missing reference")
-                return {"success": False, "error": "Missing reference"}
+                logger.warning("Webhook missing reference - attempting fallback by email and amount")
+                
+                # Fallback: match by email and amount if reference is missing
+                if customer_email and amount:
+                    amount_ghs = amount / 100  # Convert from kobo
+                    trans_result = await session.execute(
+                        select(OnlineTransaction).where(
+                            (OnlineTransaction.payer_email == customer_email) &
+                            (OnlineTransaction.amount == amount_ghs) &
+                            (OnlineTransaction.status == TransactionStatus.PENDING)
+                        ).order_by(OnlineTransaction.created_at.desc())
+                    )
+                    transaction = trans_result.scalars().first()
+                    
+                    if transaction:
+                        reference = transaction.reference
+                        logger.info(f"Matched transaction by email/amount fallback: {reference}")
+                
+                if not reference:
+                    logger.error("Could not match transaction - no reference and email/amount fallback failed")
+                    return {"success": False, "error": "Could not match payment to transaction"}
             
             # Find transaction
             trans_result = await session.execute(
@@ -182,23 +208,30 @@ class OnlinePaymentService:
                 logger.info(f"Transaction already processed: {reference}")
                 return {"success": True, "processed": False}
             
-            # Verify with Paystack
-            verify_result = await self.paystack.verify_payment(reference)
-            
-            if not verify_result["success"]:
-                logger.error(f"Verification failed: {reference}")
-                transaction.status = TransactionStatus.FAILED
-                transaction.failed_reason = "Verification failed"
-                session.add(transaction)
-                await session.commit()
-                return {"success": False, "error": "Verification failed"}
-            
-            paystack_data = verify_result["data"]
-            paystack_status = paystack_data.get("status")
+            # Check webhook status first (no API call needed)
+            if status_val == "success":
+                logger.info(f"Webhook indicates success, processing payment: {reference}")
+                paystack_status = "success"
+                amount_paid = amount / 100 if amount else 0  # Convert from kobo
+            else:
+                logger.info(f"Webhook status not success, verifying with Paystack: {reference}")
+                # Verify with Paystack for non-success webhooks or if status missing
+                verify_result = await self.paystack.verify_payment(reference)
+                
+                if not verify_result["success"]:
+                    logger.error(f"Verification failed: {reference}")
+                    transaction.status = TransactionStatus.FAILED
+                    transaction.failed_reason = "Verification failed"
+                    session.add(transaction)
+                    await session.commit()
+                    return {"success": False, "error": "Verification failed"}
+                
+                paystack_data = verify_result["data"]
+                paystack_status = paystack_data.get("status")
+                amount_paid = paystack_data.get("amount", 0) / 100  # Convert from kobo
             
             # Handle payment status
             if paystack_status == "success":
-                amount_paid = paystack_data.get("amount", 0) / 100  # Convert from kobo
                 
                 # Record verification
                 verification = PaymentVerification(
