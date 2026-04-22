@@ -213,6 +213,8 @@ class OnlinePaymentService:
                 logger.info(f"Webhook indicates success, processing payment: {reference}")
                 paystack_status = "success"
                 amount_paid = amount / 100 if amount else 0  # Convert from kobo
+                # Create paystack_data from webhook payload for consistency
+                paystack_data = data if isinstance(data, dict) else {"reference": reference, "amount": amount, "status": status_val}
             else:
                 logger.info(f"Webhook status not success, verifying with Paystack: {reference}")
                 # Verify with Paystack for non-success webhooks or if status missing
