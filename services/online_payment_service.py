@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_
 from sqlmodel import select
 
-from models.fee import Fee, FeePayment, PaymentStatus
+from models.fee import Fee, FeePayment, PaymentStatus, PaymentMethod
 from models.student import Parent
 from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification
 from models.finance import JournalEntry, JournalLineItem, ReferenceType
@@ -427,7 +427,7 @@ class OnlinePaymentService:
                 fee_id=fee.id,
                 student_id=student_id,
                 amount=amount_for_this_fee,
-                payment_method="online_payment_paystack",
+                payment_method=PaymentMethod.ONLINE_PAYMENT_PAYSTACK.value,
                 reference_number=reference_number,
                 receipt_number=f"RCP-{uuid.uuid4().hex[:8].upper()}",
                 payment_date=datetime.utcnow().isoformat(),

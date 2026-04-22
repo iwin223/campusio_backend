@@ -29,6 +29,7 @@ class PaymentMethod(str, Enum):
     BANK_TRANSFER = "bank_transfer"
     MOBILE_MONEY = "mobile_money"
     CHEQUE = "cheque"
+    ONLINE_PAYMENT_PAYSTACK = "online_payment_paystack"
 
 
 class FeeStructure(SQLModel, table=True):
