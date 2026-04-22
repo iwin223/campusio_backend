@@ -13,7 +13,7 @@ from models.billing import (
 )
 from models.school import AcademicTerm
 from models.student import Student, StudentStatus
-from models.payment import OnlineTransaction, TransactionStatus
+from models.payment import OnlineTransaction, TransactionStatus, TransactionType
 from models.finance import JournalEntry, JournalLineItem, ReferenceType, PostingStatus
 from services.paystack_service import PaystackService
 from services.sms_service import sms_service
@@ -209,6 +209,7 @@ class PlatformBillingService:
                 amount=payment_amount,
                 gateway="paystack",
                 reference=transaction_id,
+                transaction_type=TransactionType.SUBSCRIPTION,  # Mark as subscription, not fee
                 status=TransactionStatus.PENDING
             )
             

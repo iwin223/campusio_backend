@@ -9,7 +9,7 @@ from sqlmodel import select
 
 from models.fee import Fee, FeePayment, PaymentStatus, PaymentMethod
 from models.student import Parent
-from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification
+from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification, TransactionType
 from models.finance import JournalEntry, JournalLineItem, ReferenceType
 from models.finance.chart_of_accounts import GLAccount
 from services.paystack_service import PaystackService
@@ -90,6 +90,7 @@ class OnlinePaymentService:
                 amount=payment_amount,
                 gateway="paystack",
                 reference=transaction_id,
+                transaction_type=TransactionType.FEE,  # Mark as fee payment
                 status=TransactionStatus.PENDING
             )
             

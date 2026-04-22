@@ -8,7 +8,7 @@ from sqlalchemy import String, cast, func
 from sqlmodel import select
 
 from services.paystack_service import PaystackService
-from models.payment import OnlineTransaction, TransactionStatus
+from models.payment import OnlineTransaction, TransactionStatus, TransactionType
 from models.settlement import Withdrawal, WithdrawalStatus
 from models.fee import FeePayment
 
@@ -261,7 +261,8 @@ class SettlementService:
             query = select(OnlineTransaction).where(
                 OnlineTransaction.school_id == school_id,
                 OnlineTransaction.created_at >= cutoff_date,
-                cast(OnlineTransaction.status, String) == "SUCCESS"
+                cast(OnlineTransaction.status, String) == "SUCCESS",
+                OnlineTransaction.transaction_type == TransactionType.FEE  # Only show fee payments, not subscriptions
             ).order_by(OnlineTransaction.created_at.desc()).limit(limit)
             
             result = await session.execute(query)
@@ -370,11 +371,12 @@ class SettlementService:
             )
             total_fee_payments = fee_payment_result.scalar() or 0
             
-            # Get total collected from online payments
+            # Get total collected from online payments (FEE ONLY - exclude subscriptions)
             online_result = await session.execute(
                 select(func.sum(OnlineTransaction.amount_paid)).where(
                     OnlineTransaction.school_id == school_id,
-                    cast(OnlineTransaction.status, String) == "SUCCESS"
+                    cast(OnlineTransaction.status, String) == "SUCCESS",
+                    OnlineTransaction.transaction_type == TransactionType.FEE  # Exclude subscriptions
                 )
             )
             total_online_payments = online_result.scalar() or 0

@@ -23,6 +23,12 @@ class PaymentGateway(str, Enum):
     JUMIAPAY = "jumiapay"
 
 
+class TransactionType(str, Enum):
+    """Type of online transaction"""
+    FEE = "fee"  # Student fee payment
+    SUBSCRIPTION = "subscription"  # Platform subscription payment
+
+
 class OnlineTransaction(SQLModel, table=True):
     """Track all online payment attempts"""
     __tablename__ = "online_transactions"
@@ -39,6 +45,9 @@ class OnlineTransaction(SQLModel, table=True):
     amount: float  # Amount requested (GHS)
     amount_paid: float = 0  # Amount actually paid
     currency: str = "GHS"
+    
+    # Transaction classification
+    transaction_type: TransactionType = TransactionType.FEE  # Type of transaction (fee or subscription)
     
     # Gateway info
     gateway: str = PaymentGateway.PAYSTACK  # "paystack", "flutterwave", etc.
@@ -71,6 +80,7 @@ class OnlineTransactionRead(SQLModel):
     student_id: str
     amount: float
     amount_paid: float
+    transaction_type: TransactionType
     status: TransactionStatus
     initiated_at: datetime
     completed_at: Optional[datetime]

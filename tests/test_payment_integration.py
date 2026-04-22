@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel, Session, select
 
 from models.payment import (
-    OnlineTransaction, TransactionStatus, PaymentVerification, PaymentGateway
+    OnlineTransaction, TransactionStatus, PaymentVerification, PaymentGateway, TransactionType
 )
 from models.fee import Fee, FeePayment, PaymentStatus
 from models.student import Student, Parent
@@ -320,6 +320,7 @@ class TestOnlinePaymentService:
             gateway=PaymentGateway.PAYSTACK,
             reference='ref_123',
             status=TransactionStatus.PROCESSING,
+            transaction_type=TransactionType.FEE,
             payment_url='https://paystack.com/checkout',
             access_code='access_xxx'
         )
@@ -363,6 +364,7 @@ class TestOnlinePaymentService:
             gateway=PaymentGateway.PAYSTACK,
             reference='ref_123',
             status=TransactionStatus.SUCCESS,  # Already processed
+            transaction_type=TransactionType.FEE,
             payment_url='https://paystack.com/checkout',
             access_code='access_xxx'
         )
@@ -392,6 +394,7 @@ class TestOnlinePaymentService:
             gateway=PaymentGateway.PAYSTACK,
             reference='ref_123',
             status=TransactionStatus.PROCESSING,
+            transaction_type=TransactionType.FEE,
             payment_url='https://paystack.com/checkout',
             access_code='access_xxx'
         )
@@ -526,6 +529,7 @@ class TestErrorHandling:
             gateway=PaymentGateway.PAYSTACK,
             reference='ref_123',
             status=TransactionStatus.PROCESSING,
+            transaction_type=TransactionType.FEE,
             payment_url='https://paystack.com/checkout',
             access_code='access_xxx'
         )
