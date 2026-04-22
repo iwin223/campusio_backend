@@ -243,8 +243,8 @@ async def paystack_webhook(
             logger.warning(f"Transaction not found: {reference}")
             return {"success": True, "processed": False}
         
-        # Route based on payment type
-        if transaction.fee_id and transaction.fee_id.startswith("sub-"):
+        # Route based on payment type - check reference prefix (more reliable than fee_id)
+        if reference.startswith("PLAT-"):
             # Platform subscription payment - use billing service
             logger.info(f"Platform subscription payment detected: {reference}")
             from services.platform_billing_service import PlatformBillingService
