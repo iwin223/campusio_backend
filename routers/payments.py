@@ -222,13 +222,55 @@ async def paystack_webhook(
         # Parse payload
         payload = json.loads(body)
         
-        # Process webhook
-        result = await online_payment_service.process_webhook(
-            session=session,
-            payload=payload
-        )
+        # Log for debugging
+        logger.info(f"Paystack webhook received: event={payload.get('event')}")
         
-        logger.info(f"Webhook processed: {payload.get('reference')}")
+        # Extract reference to determine payment type
+        data = payload.get("data", {})
+        reference = data.get("reference") if isinstance(data, dict) else payload.get("reference")
+        
+        if not reference:
+            logger.warning("Webhook missing reference")
+            return {"success": True, "processed": False}
+        
+        # Find transaction to determine if it's a platform subscription or individual fee payment
+        trans_result = await session.execute(
+            select(OnlineTransaction).where(OnlineTransaction.reference == reference)
+        )
+        transaction = trans_result.scalar_one_or_none()
+        
+        if not transaction:
+            logger.warning(f"Transaction not found: {reference}")
+            return {"success": True, "processed": False}
+        
+        # Route based on payment type
+        if transaction.fee_id and transaction.fee_id.startswith("sub-"):
+            # Platform subscription payment - use billing service
+            logger.info(f"Platform subscription payment detected: {reference}")
+            from services.platform_billing_service import PlatformBillingService
+            
+            paystack_secret_key = os.getenv("PAYSTACK_SECRET_KEY", "")
+            if not paystack_secret_key:
+                raise ValueError("PAYSTACK_SECRET_KEY not configured")
+            
+            billing_service = PlatformBillingService(paystack_secret_key)
+            result = await billing_service.verify_and_process_payment(
+                session=session,
+                transaction_id=transaction.id,
+                reference=reference,
+                amount_paid=data.get("amount", 0) / 100 if isinstance(data, dict) else 0
+            )
+            logger.info(f"Billing webhook processed: {result}")
+            return {"success": True, "processed": result.get("success", False)}
+        else:
+            # Individual fee payment - use online payment service
+            logger.info(f"Individual fee payment detected: {reference}")
+            online_payment_service = services["online_payment"]
+            result = await online_payment_service.process_webhook(
+                session=session,
+                payload=payload
+            )
+            logger.info(f"Webhook processed: {payload.get('reference')}")
         return {"success": True, "processed": result.get("processed", True)}
     
     except ValueError as e:
