@@ -387,9 +387,9 @@ async def record_payment(
     balance = fee.amount_due - fee.amount_paid - fee.discount
     
     if balance <= 0:
-        fee.status = PaymentStatus.PAID
+        fee.status = PaymentStatus.PAID.value
     else:
-        fee.status = PaymentStatus.PARTIAL
+        fee.status = PaymentStatus.PARTIAL.value
     
     fee.updated_at = datetime.utcnow()
     session.add(fee)
@@ -462,9 +462,9 @@ async def record_payment(
             other_fee_balance_after = other_fee.amount_due - other_fee.amount_paid - other_fee.discount
             
             if other_fee_balance_after <= 0:
-                other_fee.status = PaymentStatus.PAID
+                other_fee.status = PaymentStatus.PAID.value
             else:
-                other_fee.status = PaymentStatus.PARTIAL
+                other_fee.status = PaymentStatus.PARTIAL.value
             
             other_fee.updated_at = datetime.utcnow()
             session.add(other_fee)

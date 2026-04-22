@@ -554,11 +554,11 @@ class ExpenseService:
             # Update payment status
             remaining = expense.amount - total_paid
             if remaining < 0.01:  # Account for rounding
-                expense.payment_status = PaymentStatus.PAID
+                expense.payment_status = PaymentStatus.PAID.value
             elif total_paid > 0.01:
-                expense.payment_status = PaymentStatus.PARTIAL
+                expense.payment_status = PaymentStatus.PARTIAL.value
             else:
-                expense.payment_status = PaymentStatus.OUTSTANDING
+                expense.payment_status = PaymentStatus.OUTSTANDING.value
             
             expense.updated_at = datetime.utcnow()
             self.session.add(expense)

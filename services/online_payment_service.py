@@ -443,9 +443,9 @@ class OnlinePaymentService:
             # Update fee status
             fee_balance_after = fee.amount_due - fee.amount_paid - fee.discount
             if fee_balance_after <= 0:
-                fee.status = PaymentStatus.PAID
+                fee.status = PaymentStatus.PAID.value
             else:
-                fee.status = PaymentStatus.PARTIAL
+                fee.status = PaymentStatus.PARTIAL.value
             
             fee.updated_at = datetime.utcnow()
             session.add(fee)
