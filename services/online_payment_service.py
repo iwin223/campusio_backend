@@ -396,11 +396,7 @@ class OnlinePaymentService:
                 and_(
                     Fee.student_id == student_id,
                     Fee.school_id == school_id,
-                    Fee.status.in_([
-                        PaymentStatus.PENDING.value,
-                        PaymentStatus.PARTIAL.value,
-                        PaymentStatus.OVERDUE.value
-                    ])
+                    Fee.status.in_(["pending", "partial", "overdue"])
                 )
             ).order_by(Fee.created_at)
         )
