@@ -454,6 +454,8 @@ async def handle_paystack_webhook(
         body = await request.body()
         payload = json.loads(body)
         
+        logger.info(f"Paystack webhook received: event={payload.get('event')}, data keys={list(payload.get('data', {}).keys())}")
+        
         # Verify Paystack signature
         paystack_secret = os.getenv("PAYSTACK_SECRET_KEY", "")
         signature = request.headers.get("x-paystack-signature", "")
@@ -468,12 +470,43 @@ async def handle_paystack_webhook(
         # Extract payment details
         data = payload.get("data", {})
         reference = data.get("reference")
-        amount = data.get("amount") / 100  # Convert from kobo to GHS
+        amount = data.get("amount")
         status_val = data.get("status")
+        customer_email = data.get("customer", {}).get("email") if isinstance(data.get("customer"), dict) else None
+        paystack_ref = data.get("reference")
+        
+        # Convert amount from kobo to GHS
+        if amount:
+            amount = amount / 100
+        
+        logger.info(f"Webhook payment details - Reference: {reference}, Amount: {amount}, Status: {status_val}, Email: {customer_email}")
         
         if status_val != "success":
             logger.info(f"Payment unsuccessful: {reference}")
             return {"status": "ok"}
+        
+        # Validate reference exists
+        if not reference:
+            logger.warning("Webhook missing reference - attempting fallback by email and amount")
+            
+            # Fallback: match by email and amount if reference is missing
+            if customer_email and amount:
+                txn_result = await session.execute(
+                    select(OnlineTransaction).where(
+                        (OnlineTransaction.payer_email == customer_email) &
+                        (OnlineTransaction.amount == amount) &
+                        (OnlineTransaction.status == TransactionStatus.PENDING)
+                    ).order_by(OnlineTransaction.created_at.desc())
+                )
+                transaction = txn_result.scalars().first()
+                
+                if transaction:
+                    reference = transaction.reference
+                    logger.info(f"Matched transaction by email/amount fallback: {reference}")
+            
+            if not reference:
+                logger.error("Could not match transaction - no reference and email/amount fallback failed")
+                return {"status": "ok"}
         
         # Get transaction
         txn_result = await session.execute(
@@ -492,6 +525,8 @@ async def handle_paystack_webhook(
             logger.info(f"Not a platform subscription payment: {reference}")
             return {"status": "ok"}
         
+        logger.info(f"Processing subscription payment: reference={reference}, amount={amount}, transaction_id={transaction.id}")
+        
         # Verify and process
         result = await billing_service.verify_and_process_payment(
             session=session,
@@ -508,7 +543,7 @@ async def handle_paystack_webhook(
         return {"status": "ok"}
         
     except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
+        logger.error(f"Webhook error: {str(e)}", exc_info=True)
         # Return 200 OK to Paystack to avoid retries, but log the error
         return {"status": "error", "message": str(e)}
 
