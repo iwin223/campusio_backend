@@ -393,9 +393,15 @@ class OnlinePaymentService:
         # Get all outstanding fees for this student, ordered by creation date
         fees_result = await session.execute(
             select(Fee).where(
-                Fee.student_id == student_id,
-                Fee.school_id == school_id,
-                Fee.status.in_([PaymentStatus.PENDING, PaymentStatus.PARTIAL, PaymentStatus.OVERDUE])
+                and_(
+                    Fee.student_id == student_id,
+                    Fee.school_id == school_id,
+                    Fee.status.in_([
+                        PaymentStatus.PENDING.value,
+                        PaymentStatus.PARTIAL.value,
+                        PaymentStatus.OVERDUE.value
+                    ])
+                )
             ).order_by(Fee.created_at)
         )
         outstanding_fees = fees_result.scalars().all()
