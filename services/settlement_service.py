@@ -169,12 +169,7 @@ class SettlementService:
                     "error": "Withdrawal amount must be greater than zero"
                 }
             
-            # Check minimum withdrawal (Paystack minimum is usually GHS 50)
-            # if amount < 50:
-            #     return {
-            #         "success": False,
-            #         "error": "Minimum withdrawal amount is GHS 50"
-            #     }
+        
             
             # Step 1: Create recipient
             recipient_result = await self.create_momo_recipient(
