@@ -353,7 +353,13 @@ class SettlementService:
         """
         Calculate school's settlement balance from database
         
-        Formula: Total Payments In - Total Withdrawals
+        Formula: Total Fees Collected - Total Withdrawals
+        
+        NOTE: Only FeePayment is counted because:
+        - Manual fees → directly create FeePayment
+        - Online fees → create OnlineTransaction → create FeePayment
+        - Therefore all payments end up in FeePayment
+        - OnlineTransaction is just a tracker, not the actual fund source
         
         Args:
             session: Database session
@@ -363,23 +369,15 @@ class SettlementService:
             float: Balance in GHS (can be negative if over-withdrawn)
         """
         try:
-            # Get total collected from manual fee payments
             fee_payment_result = await session.execute(
                 select(func.sum(FeePayment.amount)).where(
                     FeePayment.school_id == school_id
                 )
             )
-            total_fee_payments = fee_payment_result.scalar() or 0
-            
-            # Get total collected from online payments (FEE ONLY - exclude subscriptions)
-            online_result = await session.execute(
-                select(func.sum(OnlineTransaction.amount_paid)).where(
-                    OnlineTransaction.school_id == school_id,
-                    cast(OnlineTransaction.status, String) == "SUCCESS",
-                    OnlineTransaction.transaction_type == TransactionType.FEE  # Exclude subscriptions
-                )
-            )
-            total_online_payments = online_result.scalar() or 0
+
+
+            total_collected = fee_payment_result.scalar() or 0
+
             
             # Get total withdrawn (completed + pending withdrawals count as out)
             withdrawal_result = await session.execute(
@@ -391,8 +389,7 @@ class SettlementService:
             total_withdrawn = withdrawal_result.scalar() or 0
             
             # Calculate balance
-            total_collected = float(total_fee_payments) + float(total_online_payments)
-            balance = total_collected - float(total_withdrawn)
+            balance = float(total_collected) - float(total_withdrawn)
             
             logger.info(
                 f"Balance calculation for {school_id}: "
