@@ -326,3 +326,100 @@ async def check_transfer_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to check transfer status"
         )
+
+
+@router.post("/transfer/{transfer_code}/verify", status_code=200)
+async def verify_and_update_transfer(
+    transfer_code: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+    settlement_service: SettlementService = Depends(get_settlement_service)
+) -> dict:
+    """
+    Verify transfer status with Paystack and update database
+    
+    **Auth Required:** Admin or Finance role
+    
+    **Purpose:** Direct verification - bypasses webhook dependency
+    
+    **Path Params:**
+    - transfer_code: Paystack transfer code
+    
+    **Returns:**
+    ```json
+    {
+        "success": true,
+        "status": "success|pending|failed",
+        "updated": true/false,
+        "message": "Transfer verified and updated"
+    }
+    ```
+    """
+    try:
+        # Verify with Paystack
+        paystack_service = PaystackService(os.getenv("PAYSTACK_SECRET_KEY", ""))
+        verify_result = await paystack_service.verify_transfer(transfer_code)
+        
+        if not verify_result.get("success", False):
+            logger.warning(f"Paystack verification failed for {transfer_code}")
+            return {
+                "success": False,
+                "status": "unknown",
+                "updated": False,
+                "message": "Could not verify with Paystack"
+            }
+        
+        paystack_status = verify_result.get("status")
+        
+        logger.info(f"Paystack returned status: {paystack_status} for {transfer_code}")
+        
+        # Update database if status changed
+        if paystack_status == "success":
+            logger.info(f"Paystack confirmed completed - updating transfer {transfer_code}")
+            
+            # Update transfer record in database
+            result = await settlement_service.update_transfer_status(
+                session=session,
+                transfer_code=transfer_code,
+                status="completed",
+                paystack_data=verify_result
+            )
+            
+            return {
+                "success": True,
+                "status": "success",
+                "updated": result.get("updated", False),
+                "message": "Transfer verified and updated to completed"
+            }
+        elif paystack_status == "failed":
+            logger.info(f"Paystack marked as failed - updating transfer {transfer_code}")
+            
+            result = await settlement_service.update_transfer_status(
+                session=session,
+                transfer_code=transfer_code,
+                status="failed",
+                paystack_data=verify_result
+            )
+            
+            return {
+                "success": True,
+                "status": "failed",
+                "updated": result.get("updated", False),
+                "message": "Transfer verified and marked as failed"
+            }
+        else:
+            # Still pending
+            logger.info(f"Transfer still pending: {transfer_code}")
+            return {
+                "success": True,
+                "status": "pending",
+                "updated": False,
+                "message": f"Transfer status: {paystack_status or 'pending'}"
+            }
+    
+    except Exception as e:
+        logger.error(f"Verification error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )

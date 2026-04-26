@@ -427,3 +427,96 @@ class SettlementService:
                 "success": False,
                 "error": str(e)
             }
+    
+    async def update_transfer_status(
+        self,
+        session: AsyncSession,
+        transfer_code: str,
+        status: str,
+        paystack_data: Dict = None
+    ) -> Dict:
+        """
+        Update withdrawal record with new status from Paystack
+        
+        Args:
+            session: Database session
+            transfer_code: Paystack transfer code
+            status: New status (completed, failed, pending)
+            paystack_data: Data from Paystack verification
+        
+        Returns:
+            {
+                "success": True/False,
+                "updated": True/False,
+                "transfer_code": "TRF-xxx",
+                "status": "completed|failed|pending"
+            }
+        """
+        try:
+            # Find withdrawal record by transfer code
+            statement = select(Withdrawal).where(
+                Withdrawal.transfer_code == transfer_code
+            )
+            result = await session.execute(statement)
+            withdrawal = result.scalars().first()
+            
+            if not withdrawal:
+                logger.warning(f"Withdrawal not found for code: {transfer_code}")
+                return {
+                    "success": False,
+                    "updated": False,
+                    "message": "Withdrawal not found"
+                }
+            
+            # Map status
+            withdrawal_status_map = {
+                "completed": WithdrawalStatus.COMPLETED,
+                "success": WithdrawalStatus.COMPLETED,
+                "failed": WithdrawalStatus.FAILED,
+                "pending": WithdrawalStatus.PENDING
+            }
+            
+            new_status = withdrawal_status_map.get(status, WithdrawalStatus.PENDING)
+            
+            # Update if status actually changed
+            if withdrawal.status != new_status:
+                old_status = withdrawal.status
+                withdrawal.status = new_status
+                
+                if new_status == WithdrawalStatus.COMPLETED:
+                    withdrawal.completed_at = datetime.utcnow()
+                
+                await session.commit()
+                logger.info(
+                    f"Updated withdrawal {transfer_code}: "
+                    f"{old_status} → {new_status}"
+                )
+                
+                return {
+                    "success": True,
+                    "updated": True,
+                    "transfer_code": transfer_code,
+                    "status": status
+                }
+            else:
+                logger.info(
+                    f"Withdrawal {transfer_code} status unchanged: {withdrawal.status}"
+                )
+                return {
+                    "success": True,
+                    "updated": False,
+                    "transfer_code": transfer_code,
+                    "status": status
+                }
+        
+        except Exception as e:
+            logger.error(
+                f"Error updating transfer status: {str(e)}", 
+                exc_info=True
+            )
+            await session.rollback()
+            return {
+                "success": False,
+                "updated": False,
+                "error": str(e)
+            }
