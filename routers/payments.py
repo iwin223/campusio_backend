@@ -4,6 +4,7 @@ import json
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_
 from sqlmodel import select
 from pydantic import BaseModel
 import os
@@ -12,6 +13,8 @@ from database import get_session
 from auth import get_current_user
 from models.payment import OnlineTransaction, TransactionStatus
 from models.user import User, UserRole
+from models.fee import Fee
+from models.student import Student, Parent, StudentParent
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,109 @@ def get_payment_services():
         "paystack": PaystackService(paystack_secret_key),
         "online_payment": OnlinePaymentService(paystack_secret_key)
     }
+
+
+# ============================================================================
+# HELPER FUNCTIONS - PARENT-CHILD-FEE VALIDATION
+# ============================================================================
+
+async def get_parent_children_ids(current_user: User, session: AsyncSession) -> List[str]:
+    """Get all student IDs for a parent's children"""
+    parent_result = await session.execute(
+        select(Parent).where(Parent.user_id == current_user.id)
+    )
+    parent = parent_result.scalar_one_or_none()
+    
+    if not parent:
+        return []
+    
+    student_parent_result = await session.execute(
+        select(StudentParent).where(StudentParent.parent_id == parent.id)
+    )
+    student_parents = student_parent_result.scalars().all()
+    
+    return [sp.student_id for sp in student_parents]
+
+
+async def verify_parent_fee_access(
+    fee_id: str, 
+    current_user: User, 
+    session: AsyncSession
+) -> Fee:
+    """
+    Verify that a parent has access to a specific fee
+    
+    Validates:
+    1. Fee exists
+    2. Fee belongs to current user's school
+    3. Fee's student is the parent's child
+    
+    Raises HTTPException if validation fails
+    Returns: Fee object if validation passes
+    """
+    # Get fee
+    fee_result = await session.execute(
+        select(Fee).where(Fee.id == fee_id)
+    )
+    fee = fee_result.scalar_one_or_none()
+    
+    if not fee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Fee not found"
+        )
+    
+    # Validate school context
+    if fee.school_id != current_user.school_id:
+        logger.warning(
+            f"Cross-school fee access attempt: parent_school={current_user.school_id}, "
+            f"fee_school={fee.school_id}, parent_id={current_user.id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this fee"
+        )
+    
+    # Validate parent-child relationship
+    children_ids = await get_parent_children_ids(current_user, session)
+    if fee.student_id not in children_ids:
+        logger.warning(
+            f"Unauthorized fee access attempt: fee belongs to student {fee.student_id}, "
+            f"but parent {current_user.id} does not have access (children: {children_ids})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to pay this fee"
+        )
+    
+    return fee
+
+
+async def check_duplicate_pending_transaction(
+    fee_id: str,
+    parent_id: str,
+    amount: float,
+    session: AsyncSession,
+    tolerance: float = 0.01
+) -> Optional[OnlineTransaction]:
+    """
+    Check if there's already a pending transaction for this fee
+    
+    Prevents duplicate payment initialization due to network retries
+    
+    Returns: Existing pending transaction if found, None otherwise
+    """
+    trans_result = await session.execute(
+        select(OnlineTransaction).where(
+            (OnlineTransaction.fee_id == fee_id) &
+            (OnlineTransaction.parent_id == parent_id) &
+            (OnlineTransaction.status == TransactionStatus.PENDING) &
+            # Amount within tolerance (handles floating point issues)
+            (OnlineTransaction.amount >= amount - tolerance) &
+            (OnlineTransaction.amount <= amount + tolerance)
+        ).order_by(OnlineTransaction.created_at.desc())
+    )
+    return trans_result.scalars().first()
 
 
 # ============================================================================
@@ -76,7 +182,8 @@ async def initialize_payment(
     **Request Body:**
     ```json
     {
-        "fee_id": "uuid-of-fee"
+        "fee_id": "uuid-of-fee",
+        "amount_to_pay": 500.00  # Optional: for partial payments
     }
     ```
     
@@ -92,58 +199,131 @@ async def initialize_payment(
     ```
     
     **Errors:**
-    - 400: Invalid fee ID
-    - 404: Fee not found or already paid
+    - 400: Invalid request data
+    - 403: Not authorized to pay this fee
+    - 404: Fee not found
     - 500: Payment initialization failed
+    
+    **Security:**
+    - Validates parent has access to fee's student
+    - Validates fee belongs to parent's school
+    - Validates amount doesn't exceed outstanding balance
+    - Prevents duplicate payment initialization
     """
     
     try:
-        # Get services
-        services = get_payment_services()
-        online_payment_service = services["online_payment"]
-        
         # Verify user is parent
         if current_user.role != UserRole.PARENT:
+            logger.warning(f"Non-parent user {current_user.id} attempted payment initialization")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only parents can initiate payments"
             )
         
-        # Get parent's email from user context
-        parent_email = current_user.email
+        # Get fee and validate parent access (CRITICAL SECURITY CHECK)
+        fee = await verify_parent_fee_access(
+            request_data.fee_id,
+            current_user,
+            session
+        )
         
-        # Use fee_id as provided
-        fee_id = request_data.fee_id
+        # Calculate amount to pay
+        amount_due = fee.amount_due - fee.amount_paid
+        
+        if amount_due <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No outstanding balance for this fee"
+            )
+        
+        # Validate custom amount if provided
+        if request_data.amount_to_pay is not None:
+            if request_data.amount_to_pay <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Payment amount must be greater than zero"
+                )
+            if request_data.amount_to_pay > amount_due:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Payment amount cannot exceed outstanding balance of GHS {amount_due:.2f}"
+                )
+            payment_amount = request_data.amount_to_pay
+        else:
+            payment_amount = amount_due
+        
+        # Check for duplicate pending transaction (idempotency)
+        existing_txn = await check_duplicate_pending_transaction(
+            fee_id=request_data.fee_id,
+            parent_id=current_user.id,
+            amount=payment_amount,
+            session=session
+        )
+        
+        if existing_txn:
+            logger.info(
+                f"Duplicate payment initialization detected: "
+                f"fee_id={request_data.fee_id}, parent_id={current_user.id}, "
+                f"returning existing transaction {existing_txn.reference}"
+            )
+            return {
+                "success": True,
+                "transaction_id": existing_txn.reference,
+                "payment_url": existing_txn.payment_url,
+                "reference": existing_txn.reference,
+                "amount": float(existing_txn.amount),
+                "duplicate": True  # Flag to frontend that this is a retry
+            }
+        
+        # Get services
+        services = get_payment_services()
+        online_payment_service = services["online_payment"]
+        
+        # Get parent's email from user context
+        parent_email = current_user.email 
+        # Get parent id from user context 
+       
         
         # Initiate payment
+        # NOTE: parent_id here is User.id, not Parent.id. Service layer converts it.
         result = await online_payment_service.initiate_payment(
             session=session,
-            fee_id=fee_id,
-            parent_id=current_user.id,
+            fee_id=request_data.fee_id,
+            parent_id=current_user.id,  # User.id (service queries by Parent.user_id)
             parent_email=parent_email,
             school_id=current_user.school_id,
-            amount_to_pay=request_data.amount_to_pay
+            amount_to_pay=payment_amount,
+            # Pass fee object for additional validation in service
+            fee=fee
         )
         
         if not result["success"]:
+            logger.error(
+                f"Payment initialization failed for fee {request_data.fee_id}: "
+                f"{result.get('error', 'Unknown error')}"
+            )
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.get("error", "Payment initialization failed")
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Payment initialization failed"
             )
         
-        logger.info(f"Payment initiated: {result['transaction_id']}")
+        logger.info(
+            f"Payment initiated successfully: txn_id={result['transaction_id']}, "
+            f"fee_id={request_data.fee_id}, amount=GHS {payment_amount:.2f}, "
+            f"parent_id={current_user.id}"
+        )
         return result
     
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"Configuration error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Payment system not configured"
         )
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error initiating payment: {str(e)}")
+        logger.error(f"Error initiating payment: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Payment initialization failed"
@@ -328,8 +508,10 @@ async def get_transaction_status(
         # Get transaction
         result = await session.execute(
             select(OnlineTransaction).where(
-                OnlineTransaction.reference == transaction_id,
-                OnlineTransaction.school_id == current_user.school_id
+                and_(
+                    OnlineTransaction.reference == transaction_id,
+                    OnlineTransaction.school_id == current_user.school_id
+                )
             )
         )
         transaction = result.scalar_one_or_none()
@@ -341,11 +523,25 @@ async def get_transaction_status(
             )
         
         # Verify authorization (parent can only see their own)
-        if current_user.role == UserRole.PARENT and transaction.parent_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this transaction"
+        # NOTE: transaction.parent_id stores Parent.id, not User.id
+        # We need to look up the parent record to get the correct ID
+        if current_user.role == UserRole.PARENT:
+            parent_result = await session.execute(
+                select(Parent).where(Parent.user_id == current_user.id)
             )
+            parent = parent_result.scalar_one_or_none()
+            
+            if not parent or transaction.parent_id != parent.id:
+                logger.warning(
+                    f"Unauthorized transaction access attempt: "
+                    f"user_id={current_user.id}, "
+                    f"parent_id={parent.id if parent else 'None'}, "
+                    f"transaction.parent_id={transaction.parent_id}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to view this transaction"
+                )
         
         return {
             "transaction_id": transaction.reference,
@@ -429,7 +625,24 @@ async def list_transactions(
         
         # Filter by role
         if current_user.role == UserRole.PARENT:
-            query = query.where(OnlineTransaction.parent_id == current_user.id)
+            # Get parent record to get the correct parent_id
+            # NOTE: current_user.id is User.id, we need Parent.id for transaction filtering
+            parent_result = await session.execute(
+                select(Parent).where(Parent.user_id == current_user.id)
+            )
+            parent = parent_result.scalar_one_or_none()
+            
+            if parent:
+                query = query.where(OnlineTransaction.parent_id == parent.id)
+            else:
+                # Parent not found, return empty list
+                return {
+                    "total": 0,
+                    "count": 0,
+                    "skip": skip,
+                    "limit": limit,
+                    "transactions": []
+                }
         elif current_user.role not in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -484,4 +697,148 @@ async def list_transactions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error retrieving transactions"
+        )
+
+
+@router.post("/{transaction_id}/verify", status_code=200)
+async def verify_payment_with_paystack(
+    transaction_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    """
+    Manually verify payment status with Paystack
+    
+    **Purpose**: Fallback when webhook doesn't arrive - forces verification with Paystack
+    
+    **Auth Required:** Parent role
+    
+    **Path Parameters:**
+    - transaction_id: Reference ID (TXN-xxx)
+    
+    **Returns:**
+    ```json
+    {
+        "success": true,
+        "status": "success|pending|failed",
+        "message": "Payment verified and processed" OR "Payment still pending"
+    }
+    ```
+    
+    **Use Case**: 
+    - Frontend calls this after polling times out at 10 minutes
+    - Bypasses webhook dependency
+    - Immediately updates transaction if Paystack confirms paid
+    """
+    
+    try:
+        # Get transaction
+        result = await session.execute(
+            select(OnlineTransaction).where(
+                and_(
+                    OnlineTransaction.reference == transaction_id,
+                    OnlineTransaction.school_id == current_user.school_id
+                )
+            )
+        )
+        transaction = result.scalar_one_or_none()
+        
+        if not transaction:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Transaction not found"
+            )
+        
+        # Verify authorization (parent can only verify their own)
+        if current_user.role == UserRole.PARENT:
+            parent_result = await session.execute(
+                select(Parent).where(Parent.user_id == current_user.id)
+            )
+            parent = parent_result.scalar_one_or_none()
+            
+            if not parent or transaction.parent_id != parent.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to verify this transaction"
+                )
+        
+        # If already processed, return current status
+        if transaction.status == TransactionStatus.SUCCESS:
+            return {
+                "success": True,
+                "status": "success",
+                "message": "Payment already verified"
+            }
+        
+        # If failed, return failure
+        if transaction.status == TransactionStatus.FAILED:
+            return {
+                "success": False,
+                "status": "failed",
+                "message": transaction.failed_reason or "Payment failed"
+            }
+        
+        # Otherwise, verify with Paystack
+        logger.info(f"Manual verification requested: {transaction_id}")
+        
+        services = get_payment_services()
+        paystack_service = services["paystack"]
+        online_payment_service = services["online_payment"]
+        
+        # Verify with Paystack
+        verify_result = await paystack_service.verify_payment(transaction.reference)
+        
+        if not verify_result["success"]:
+            logger.warning(f"Verification with Paystack failed: {transaction_id}")
+            return {
+                "success": False,
+                "status": "failed",
+                "message": "Could not verify with Paystack"
+            }
+        
+        paystack_data = verify_result["data"]
+        paystack_status = paystack_data.get("status")
+        
+        # If Paystack says it's paid, process it
+        if paystack_status == "success":
+            logger.info(f"Manual verification found successful payment: {transaction_id}")
+            
+            # Process the webhook manually
+            webhook_payload = {
+                "event": "charge.success",
+                "data": paystack_data
+            }
+            
+            result = await online_payment_service.process_webhook(
+                session=session,
+                payload=webhook_payload
+            )
+            
+            if result.get("success"):
+                return {
+                    "success": True,
+                    "status": "success",
+                    "message": "Payment verified and processed successfully"
+                }
+            else:
+                return {
+                    "success": False,
+                    "status": "pending",
+                    "message": result.get("error", "Could not process payment")
+                }
+        else:
+            # Still pending or some other status
+            return {
+                "success": True,
+                "status": paystack_status or "pending",
+                "message": f"Payment status: {paystack_status or 'pending'}"
+            }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error verifying payment: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error verifying payment"
         )

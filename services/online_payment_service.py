@@ -28,41 +28,59 @@ class OnlinePaymentService:
         self,
         session: AsyncSession,
         fee_id: str,
-        parent_id: str,
+        parent_id: str,  # NOTE: This is User.id, not Parent.id. Will be looked up via Parent.user_id
         parent_email: str,
         school_id: str,
-        amount_to_pay: Optional[float] = None
+        amount_to_pay: Optional[float] = None,
+        fee: Optional[Fee] = None  # Optional: pre-fetched fee object for validation
     ) -> Dict:
         """
         Initiate online payment for a fee
+        
+        SECURITY: This method validates the fee object to prevent unauthorized payments
+        
+        Args:
+            parent_id: User.id of the parent user (not Parent.id)
+                       Will be looked up via Parent.user_id relationship
         
         Returns:
         {
             "success": True,
             "transaction_id": "txn-xxx",
             "payment_url": "https://checkout.paystack.com/...",
-            "reference": "PAY-xxx"
+            "reference": "PAY-xxx",
+            "amount": 500.00
         }
         """
         
         try:
-            # Get fee details
-            # First try to get with school_id filter (preferred)
-            fee_result = await session.execute(
-                select(Fee).where(Fee.id == fee_id)
-            )
-            fee = fee_result.scalar_one_or_none()
+            # Get fee details if not provided
+            if fee is None:
+                fee_result = await session.execute(
+                    select(Fee).where(Fee.id == fee_id)
+                )
+                fee = fee_result.scalar_one_or_none()
             
             if not fee:
                 return {"success": False, "error": "Fee not found"}
             
-            # Verify parent has access to this fee
-            # (parent should only be able to pay for their children's fees)
-            # This verification is done at the parent endpoint level, so we trust the fee_id
-            # But we use the fee's school_id for transaction context
-            if not school_id:
-                # If parent doesn't have school_id, use the fee's school_id
-                school_id = fee.school_id
+            # SECURITY: Validate fee belongs to correct school (defensive check)
+            if fee.school_id != school_id:
+                logger.error(
+                    f"School mismatch in payment: fee.school_id={fee.school_id}, "
+                    f"expected={school_id}, parent_id={parent_id}"
+                )
+                return {"success": False, "error": "Unauthorized fee access"}
+            
+            # SECURITY: Validate parent exists (defensive check)
+            # Note: parent_id is actually User.id, so we query by user_id
+            parent_result = await session.execute(
+                select(Parent).where(Parent.user_id == parent_id)
+            )
+            parent_record = parent_result.scalar_one_or_none()
+            if not parent_record:
+                logger.error(f"Parent record not found: {parent_id}")
+                return {"success": False, "error": "Parent not found"}
             
             # Calculate amount due (total - already paid)
             amount_due = fee.amount_due - fee.amount_paid
@@ -82,11 +100,12 @@ class OnlinePaymentService:
             # Create transaction record
             transaction_id = f"TXN-{uuid.uuid4().hex[:12].upper()}"
             
+            # Use the actual Parent.id (not User.id) for transaction record
             transaction = OnlineTransaction(
                 school_id=school_id,
                 fee_id=fee_id,
                 student_id=fee.student_id,
-                parent_id=parent_id,
+                parent_id=parent_record.id,  # Use Parent record ID, not User ID
                 amount=payment_amount,
                 gateway="paystack",
                 reference=transaction_id,
