@@ -2,6 +2,7 @@
 import logging
 import json
 from typing import List, Optional
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_
@@ -709,26 +710,19 @@ async def verify_payment_with_paystack(
     """
     Manually verify payment status with Paystack
     
-    **Purpose**: Fallback when webhook doesn't arrive - forces verification with Paystack
+    **Purpose**: Direct verification - bypass webhook if not configured
     
     **Auth Required:** Parent role
-    
-    **Path Parameters:**
-    - transaction_id: Reference ID (TXN-xxx)
     
     **Returns:**
     ```json
     {
         "success": true,
         "status": "success|pending|failed",
-        "message": "Payment verified and processed" OR "Payment still pending"
+        "message": "Payment verified",
+        "updated": true/false
     }
     ```
-    
-    **Use Case**: 
-    - Frontend calls this after polling times out at 10 minutes
-    - Bypasses webhook dependency
-    - Immediately updates transaction if Paystack confirms paid
     """
     
     try:
@@ -749,7 +743,7 @@ async def verify_payment_with_paystack(
                 detail="Transaction not found"
             )
         
-        # Verify authorization (parent can only verify their own)
+        # Verify authorization
         if current_user.role == UserRole.PARENT:
             parent_result = await session.execute(
                 select(Parent).where(Parent.user_id == current_user.id)
@@ -759,51 +753,50 @@ async def verify_payment_with_paystack(
             if not parent or transaction.parent_id != parent.id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized to verify this transaction"
+                    detail="Not authorized"
                 )
         
-        # If already processed, return current status
+        # If already success, return immediately
         if transaction.status == TransactionStatus.SUCCESS:
             return {
                 "success": True,
                 "status": "success",
-                "message": "Payment already verified"
+                "message": "Payment already processed",
+                "updated": False
             }
         
-        # If failed, return failure
-        if transaction.status == TransactionStatus.FAILED:
-            return {
-                "success": False,
-                "status": "failed",
-                "message": transaction.failed_reason or "Payment failed"
-            }
-        
-        # Otherwise, verify with Paystack
-        logger.info(f"Manual verification requested: {transaction_id}")
-        
+        # Verify with Paystack API
         services = get_payment_services()
         paystack_service = services["paystack"]
-        online_payment_service = services["online_payment"]
         
-        # Verify with Paystack
+        logger.info(f"Verifying transaction {transaction_id} with Paystack")
+        
         verify_result = await paystack_service.verify_payment(transaction.reference)
         
         if not verify_result["success"]:
-            logger.warning(f"Verification with Paystack failed: {transaction_id}")
+            logger.warning(f"Paystack verification failed for {transaction_id}")
             return {
                 "success": False,
-                "status": "failed",
-                "message": "Could not verify with Paystack"
+                "status": "unknown",
+                "message": "Could not verify with Paystack",
+                "updated": False
             }
         
         paystack_data = verify_result["data"]
         paystack_status = paystack_data.get("status")
         
-        # If Paystack says it's paid, process it
+        logger.info(f"Paystack returned status: {paystack_status} for {transaction_id}")
+        
+        # If Paystack says successful, update transaction immediately
         if paystack_status == "success":
-            logger.info(f"Manual verification found successful payment: {transaction_id}")
+            logger.info(f"Paystack confirmed success - updating transaction {transaction_id}")
             
-            # Process the webhook manually
+            amount_paid = paystack_data.get("amount", 0) / 100  # Convert from kobo
+            
+            # Use online payment service to process the payment (includes fee distribution)
+            online_payment_service = services["online_payment"]
+            
+            # Process webhook payload to trigger fee distribution
             webhook_payload = {
                 "event": "charge.success",
                 "data": paystack_data
@@ -815,30 +808,43 @@ async def verify_payment_with_paystack(
             )
             
             if result.get("success"):
+                logger.info(f"Transaction {transaction_id} processed successfully with fee distribution")
+                
+                # Get updated transaction
+                updated_result = await session.execute(
+                    select(OnlineTransaction).where(OnlineTransaction.reference == transaction_id)
+                )
+                updated_transaction = updated_result.scalar_one_or_none()
+                
                 return {
                     "success": True,
                     "status": "success",
-                    "message": "Payment verified and processed successfully"
+                    "message": "Payment verified and processed",
+                    "updated": True
                 }
             else:
+                logger.error(f"Failed to process payment for {transaction_id}: {result.get('error')}")
                 return {
                     "success": False,
-                    "status": "pending",
-                    "message": result.get("error", "Could not process payment")
+                    "status": "error",
+                    "message": f"Payment verified but processing failed: {result.get('error')}",
+                    "updated": False
                 }
         else:
-            # Still pending or some other status
+            # Payment not yet successful in Paystack
+            logger.info(f"Payment not yet successful in Paystack - status: {paystack_status}")
             return {
                 "success": True,
                 "status": paystack_status or "pending",
-                "message": f"Payment status: {paystack_status or 'pending'}"
+                "message": f"Payment status: {paystack_status or 'pending'}",
+                "updated": False
             }
     
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error verifying payment: {str(e)}", exc_info=True)
+        logger.error(f"Verification error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error verifying payment"
+            detail=str(e)
         )
