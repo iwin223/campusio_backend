@@ -356,26 +356,32 @@ async def verify_and_update_transfer(
     ```
     """
     try:
+        logger.info(f"📋 [VERIFY] Starting verification for transfer: {transfer_code}")
+        
         # Verify with Paystack
         paystack_service = PaystackService(os.getenv("PAYSTACK_SECRET_KEY", ""))
+        logger.info(f"🔍 [VERIFY] Calling Paystack API for transfer: {transfer_code}")
+        
         verify_result = await paystack_service.verify_transfer(transfer_code)
         
+        logger.info(f"📡 [VERIFY] Paystack response: {verify_result}")
+        
         if not verify_result.get("success", False):
-            logger.warning(f"Paystack verification failed for {transfer_code}")
+            logger.warning(f"❌ [VERIFY] Paystack verification failed for {transfer_code}: {verify_result.get('error')}")
             return {
                 "success": False,
                 "status": "unknown",
                 "updated": False,
-                "message": "Could not verify with Paystack"
+                "message": f"Could not verify with Paystack: {verify_result.get('error', 'Unknown error')}"
             }
         
         paystack_status = verify_result.get("status")
         
-        logger.info(f"Paystack returned status: {paystack_status} for {transfer_code}")
+        logger.info(f"✓ [VERIFY] Paystack status for {transfer_code}: {paystack_status}")
         
         # Update database if status changed
         if paystack_status == "success":
-            logger.info(f"Paystack confirmed completed - updating transfer {transfer_code}")
+            logger.info(f"✅ [VERIFY] Paystack CONFIRMED COMPLETED for {transfer_code} - updating database")
             
             # Update transfer record in database
             result = await settlement_service.update_transfer_status(
@@ -385,6 +391,8 @@ async def verify_and_update_transfer(
                 paystack_data=verify_result
             )
             
+            logger.info(f"💾 [VERIFY] Database update result: {result}")
+            
             return {
                 "success": True,
                 "status": "success",
@@ -392,7 +400,7 @@ async def verify_and_update_transfer(
                 "message": "Transfer verified and updated to completed"
             }
         elif paystack_status == "failed":
-            logger.info(f"Paystack marked as failed - updating transfer {transfer_code}")
+            logger.info(f"⚠️ [VERIFY] Paystack marked as FAILED for {transfer_code} - updating database")
             
             result = await settlement_service.update_transfer_status(
                 session=session,
@@ -400,6 +408,8 @@ async def verify_and_update_transfer(
                 status="failed",
                 paystack_data=verify_result
             )
+            
+            logger.info(f"💾 [VERIFY] Database update result: {result}")
             
             return {
                 "success": True,
@@ -409,7 +419,7 @@ async def verify_and_update_transfer(
             }
         else:
             # Still pending
-            logger.info(f"Transfer still pending: {transfer_code}")
+            logger.info(f"⏳ [VERIFY] Transfer still PENDING for {transfer_code} - no database update")
             return {
                 "success": True,
                 "status": "pending",
@@ -418,7 +428,7 @@ async def verify_and_update_transfer(
             }
     
     except Exception as e:
-        logger.error(f"Verification error: {str(e)}", exc_info=True)
+        logger.error(f"❌ [VERIFY] Verification error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)

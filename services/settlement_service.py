@@ -453,6 +453,8 @@ class SettlementService:
             }
         """
         try:
+            logger.info(f"💾 [UPDATE] Looking for withdrawal with code: {transfer_code}")
+            
             # Find withdrawal record by transfer code
             statement = select(Withdrawal).where(
                 Withdrawal.transfer_code == transfer_code
@@ -461,12 +463,14 @@ class SettlementService:
             withdrawal = result.scalars().first()
             
             if not withdrawal:
-                logger.warning(f"Withdrawal not found for code: {transfer_code}")
+                logger.warning(f"❌ [UPDATE] Withdrawal NOT FOUND for code: {transfer_code}")
                 return {
                     "success": False,
                     "updated": False,
                     "message": "Withdrawal not found"
                 }
+            
+            logger.info(f"✓ [UPDATE] Found withdrawal for {transfer_code}, current status: {withdrawal.status}")
             
             # Map status
             withdrawal_status_map = {
@@ -478,6 +482,8 @@ class SettlementService:
             
             new_status = withdrawal_status_map.get(status, WithdrawalStatus.PENDING)
             
+            logger.info(f"🔄 [UPDATE] Status mapping: '{status}' → {new_status}")
+            
             # Update if status actually changed
             if withdrawal.status != new_status:
                 old_status = withdrawal.status
@@ -485,11 +491,12 @@ class SettlementService:
                 
                 if new_status == WithdrawalStatus.COMPLETED:
                     withdrawal.completed_at = datetime.utcnow()
+                    logger.info(f"⏰ [UPDATE] Set completed_at timestamp")
                 
                 await session.commit()
                 logger.info(
-                    f"Updated withdrawal {transfer_code}: "
-                    f"{old_status} → {new_status}"
+                    f"✅ [UPDATE] SUCCESS: Updated withdrawal {transfer_code} "
+                    f"from {old_status} → {new_status}"
                 )
                 
                 return {
@@ -500,7 +507,7 @@ class SettlementService:
                 }
             else:
                 logger.info(
-                    f"Withdrawal {transfer_code} status unchanged: {withdrawal.status}"
+                    f"⚠️ [UPDATE] Status unchanged for {transfer_code}: {withdrawal.status} (no update needed)"
                 )
                 return {
                     "success": True,
@@ -511,7 +518,7 @@ class SettlementService:
         
         except Exception as e:
             logger.error(
-                f"Error updating transfer status: {str(e)}", 
+                f"❌ [UPDATE] Error updating transfer status: {str(e)}", 
                 exc_info=True
             )
             await session.rollback()
