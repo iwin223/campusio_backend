@@ -644,7 +644,7 @@ async def list_transactions(
                     "limit": limit,
                     "transactions": []
                 }
-        elif current_user.role not in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
+        elif current_user.role not in [UserRole.SCHOOL_ADMIN, UserRole.ACCOUNTANT]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Insufficient permissions"
@@ -762,8 +762,8 @@ async def verify_payment_with_paystack(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Not authorized"
                 )
-        elif current_user.role != UserRole.ADMIN:
-            # Only parent or admin can verify
+        elif current_user.role != UserRole.SCHOOL_ADMIN:
+            # Only parent or school admin can verify
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Insufficient permissions"
