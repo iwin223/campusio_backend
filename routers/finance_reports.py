@@ -32,6 +32,11 @@ async def get_dashboard_metrics(
     """
     Get financial dashboard metrics summary.
     
+    Calculates metrics from posted journal entries to GL accounts.
+    Uses proper accounting balance calculations:
+    - Assets/Expenses: Debit - Credit
+    - Liabilities/Equity/Revenue: Credit - Debit
+    
     **Auth Required:** Authenticated users (finance staff, admin, principal)
     
     **Returns:**
@@ -61,82 +66,139 @@ async def get_dashboard_metrics(
                 detail="No school context"
             )
         
-        # Import GL models
-        from models.finance import GLAccount, AccountType, AccountCategory
+        # Import models
+        from models.finance import GLAccount, JournalLineItem, JournalEntry, PostingStatus, AccountType
         
-        # Get GL accounts for summary
-        query = select(
-            GLAccount.account_type,
-            GLAccount.account_category,
-            GLAccount.account_name,
-            func.sum(GLAccount.debit_balance - GLAccount.credit_balance).label('balance')
-        ).where(
-            GLAccount.school_id == school_id
-        ).group_by(
-            GLAccount.account_type,
-            GLAccount.account_category,
-            GLAccount.account_name
+        # Get all GL accounts for this school
+        account_query = select(GLAccount).where(
+            GLAccount.school_id == school_id,
+            GLAccount.is_active == True
         )
+        account_results = await session.execute(account_query)
+        gl_accounts = {acc.id: acc for acc in account_results.scalars().all()}
         
-        results = await session.exec(query)
-        accounts = results.all()
+        if not gl_accounts:
+            # No accounts configured - return zeros
+            return {
+                "cashBalance": 0,
+                "accountsReceivable": 0,
+                "totalAssets": 0,
+                "accountsPayable": 0,
+                "netProfit": 0,
+                "profitMargin": 0,
+                "revenueBySource": []
+            }
         
-        # Calculate summary metrics
+        # Get all posted journal line items (only from posted entries)
+        posted_entries_query = select(JournalEntry.id).where(
+            JournalEntry.school_id == school_id,
+            JournalEntry.posting_status == PostingStatus.POSTED
+        )
+        posted_entries = await session.execute(posted_entries_query)
+        posted_entry_ids = [e for e in posted_entries.scalars().all()]
+        
+        if not posted_entry_ids:
+            # No posted entries - return zeros
+            return {
+                "cashBalance": 0,
+                "accountsReceivable": 0,
+                "totalAssets": 0,
+                "accountsPayable": 0,
+                "netProfit": 0,
+                "profitMargin": 0,
+                "revenueBySource": []
+            }
+        
+        # Get all line items for posted entries
+        line_items_query = select(
+            JournalLineItem.gl_account_id,
+            func.sum(JournalLineItem.debit_amount).label('total_debit'),
+            func.sum(JournalLineItem.credit_amount).label('total_credit')
+        ).where(
+            JournalLineItem.journal_entry_id.in_(posted_entry_ids)
+        ).group_by(JournalLineItem.gl_account_id)
+        
+        line_items_results = await session.execute(line_items_query)
+        account_balances = {}
+        
+        for gl_account_id, total_debit, total_credit in line_items_results.all():
+            account_balances[gl_account_id] = {
+                'debit': total_debit or 0,
+                'credit': total_credit or 0
+            }
+        
+        # Calculate metrics per account type
         cash_balance = 0
         accounts_receivable = 0
         total_assets = 0
-        accounts_payable = 0
+        total_liabilities = 0
         revenue = 0
         expenses = 0
-        
         revenue_by_source = {}
         
-        for account_type, account_category, account_name, balance in accounts:
-            if account_type == AccountType.ASSET:
-                total_assets += balance or 0
-                if "cash" in account_name.lower() or "checking" in account_name.lower():
-                    cash_balance += balance or 0
-                elif "receivable" in account_name.lower():
-                    accounts_receivable += balance or 0
+        for account_id, account in gl_accounts.items():
+            balance_data = account_balances.get(account_id, {'debit': 0, 'credit': 0})
+            debit = balance_data['debit']
+            credit = balance_data['credit']
             
-            elif account_type == AccountType.LIABILITY:
-                if "payable" in account_name.lower():
-                    accounts_payable += balance or 0
+            # Calculate balance based on account type (normal balance rules)
+            if account.account_type == AccountType.ASSET:
+                balance = debit - credit  # Assets normally debit
+                total_assets += balance
+                
+                if "cash" in account.account_name.lower() or "checking" in account.account_name.lower():
+                    cash_balance += balance
+                elif "receivable" in account.account_name.lower():
+                    accounts_receivable += balance
             
-            elif account_type == AccountType.REVENUE:
-                revenue += balance or 0
-                revenue_by_source[account_name] = balance or 0
+            elif account.account_type == AccountType.LIABILITY:
+                balance = credit - debit  # Liabilities normally credit
+                total_liabilities += balance
+                
+                if "payable" in account.account_name.lower():
+                    accounts_payable += balance
             
-            elif account_type == AccountType.EXPENSE:
-                expenses += balance or 0
+            elif account.account_type == AccountType.REVENUE:
+                balance = credit - debit  # Revenue normally credit (income)
+                revenue += balance
+                revenue_by_source[account.account_name] = balance
+            
+            elif account.account_type == AccountType.EXPENSE:
+                balance = debit - credit  # Expenses normally debit (costs)
+                expenses += balance
         
-        # Calculate profit
+        # Calculate profit and margin
         net_profit = revenue - expenses
         profit_margin = (net_profit / revenue * 100) if revenue > 0 else 0
         
-        # Prepare revenue by source
-        total_revenue = sum(revenue_by_source.values())
+        # Prepare revenue breakdown
+        total_revenue = sum(revenue_by_source.values()) if revenue_by_source else 0
         revenue_breakdown = [
             {
                 "name": name,
-                "amount": amount,
+                "amount": float(amount),
                 "percentage": round((amount / total_revenue * 100) if total_revenue > 0 else 0, 1)
             }
             for name, amount in sorted(revenue_by_source.items(), key=lambda x: x[1], reverse=True)
+            if amount > 0
         ]
         
+        accounts_payable = total_liabilities  # Simplified: all liabilities as accounts payable
+        
         return {
-            "cashBalance": max(0, cash_balance),
-            "accountsReceivable": max(0, accounts_receivable),
-            "totalAssets": max(0, total_assets),
-            "accountsPayable": max(0, accounts_payable),
-            "netProfit": net_profit,
+            "cashBalance": float(max(0, cash_balance)),
+            "accountsReceivable": float(max(0, accounts_receivable)),
+            "totalAssets": float(max(0, total_assets)),
+            "accountsPayable": float(max(0, accounts_payable)),
+            "netProfit": float(net_profit),
             "profitMargin": round(profit_margin, 1),
             "revenueBySource": revenue_breakdown
         }
     
     except Exception as e:
         logger.error(f"Error fetching dashboard metrics: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         # Return default safe values instead of error
         return {
             "cashBalance": 0,
@@ -201,7 +263,7 @@ async def get_recent_transactions(
             OnlineTransaction.completed_at.desc()
         ).limit(limit)
         
-        results = await session.exec(query)
+        results = await session.execute(query)
         transactions_data = results.all()
         
         transactions = []
@@ -254,23 +316,48 @@ async def get_health_indicators(
         if not school_id:
             return {"indicators": []}
         
-        # Import GL models
-        from models.finance import GLAccount, AccountType
+        # Import models
+        from models.finance import GLAccount, JournalLineItem, JournalEntry, PostingStatus, AccountType
         
-        # Get GL accounts for calculations
-        query = select(
-            GLAccount.account_type,
-            GLAccount.account_name,
-            func.sum(GLAccount.debit_balance - GLAccount.credit_balance).label('balance')
-        ).where(
-            GLAccount.school_id == school_id
-        ).group_by(
-            GLAccount.account_type,
-            GLAccount.account_name
+        # Get all GL accounts for this school
+        account_query = select(GLAccount).where(
+            GLAccount.school_id == school_id,
+            GLAccount.is_active == True
         )
+        account_results = await session.execute(account_query)
+        gl_accounts = {acc.id: acc for acc in account_results.scalars().all()}
         
-        results = await session.exec(query)
-        accounts = results.all()
+        if not gl_accounts:
+            return {"indicators": []}
+        
+        # Get all posted journal entries
+        posted_entries_query = select(JournalEntry.id).where(
+            JournalEntry.school_id == school_id,
+            JournalEntry.posting_status == PostingStatus.POSTED
+        )
+        posted_entries = await session.execute(posted_entries_query)
+        posted_entry_ids = [e for e in posted_entries.scalars().all()]
+        
+        if not posted_entry_ids:
+            return {"indicators": []}
+        
+        # Get line items aggregated by account
+        line_items_query = select(
+            JournalLineItem.gl_account_id,
+            func.sum(JournalLineItem.debit_amount).label('total_debit'),
+            func.sum(JournalLineItem.credit_amount).label('total_credit')
+        ).where(
+            JournalLineItem.journal_entry_id.in_(posted_entry_ids)
+        ).group_by(JournalLineItem.gl_account_id)
+        
+        line_items_results = await session.execute(line_items_query)
+        account_balances = {}
+        
+        for gl_account_id, total_debit, total_credit in line_items_results.all():
+            account_balances[gl_account_id] = {
+                'debit': total_debit or 0,
+                'credit': total_credit or 0
+            }
         
         # Calculate key metrics
         current_assets = 0
@@ -279,20 +366,25 @@ async def get_health_indicators(
         total_liabilities = 0
         total_equity = 0
         
-        for account_type, account_name, balance in accounts:
-            balance = balance or 0
+        for account_id, account in gl_accounts.items():
+            balance_data = account_balances.get(account_id, {'debit': 0, 'credit': 0})
+            debit = balance_data['debit']
+            credit = balance_data['credit']
             
-            if account_type == AccountType.ASSET:
+            if account.account_type == AccountType.ASSET:
+                balance = debit - credit
                 total_assets += balance
-                if "current" in account_name.lower() or any(x in account_name.lower() for x in ["cash", "receivable", "inventory"]):
+                if "current" in account.account_name.lower() or any(x in account.account_name.lower() for x in ["cash", "receivable", "inventory"]):
                     current_assets += balance
             
-            elif account_type == AccountType.LIABILITY:
+            elif account.account_type == AccountType.LIABILITY:
+                balance = credit - debit
                 total_liabilities += balance
-                if "current" in account_name.lower() or "payable" in account_name.lower():
+                if "current" in account.account_name.lower() or "payable" in account.account_name.lower():
                     current_liabilities += balance
             
-            elif account_type == AccountType.EQUITY:
+            elif account.account_type == AccountType.EQUITY:
+                balance = credit - debit
                 total_equity += balance
         
         # Calculate ratios
