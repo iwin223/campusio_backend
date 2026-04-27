@@ -506,11 +506,11 @@ async def get_transaction_status(
     """
     
     try:
-        # Get transaction
+        # Get transaction by ID (UUID)
         result = await session.execute(
             select(OnlineTransaction).where(
                 and_(
-                    OnlineTransaction.reference == transaction_id,
+                    OnlineTransaction.id == transaction_id,
                     OnlineTransaction.school_id == current_user.school_id
                 )
             )
@@ -717,7 +717,7 @@ async def verify_payment_with_paystack(
     **Auth Required:** Parent or Admin role
     
     **Path Parameters:**
-    - transaction_id: Transaction reference (e.g., PAY-xxx or PLAT-xxx)
+    - transaction_id: Transaction UUID (database ID)
     
     **Returns:**
     ```json
@@ -732,11 +732,11 @@ async def verify_payment_with_paystack(
     """
     
     try:
-        # Get transaction
+        # Get transaction by ID (UUID), not by reference
         result = await session.execute(
             select(OnlineTransaction).where(
                 and_(
-                    OnlineTransaction.reference == transaction_id,
+                    OnlineTransaction.id == transaction_id,
                     OnlineTransaction.school_id == current_user.school_id
                 )
             )
@@ -809,9 +809,9 @@ async def verify_payment_with_paystack(
             amount_paid = paystack_data.get("amount", 0) / 100  # Convert from kobo
             
             # Route based on reference prefix - same as webhook
-            if transaction_id.startswith("PLAT-"):
+            if transaction.reference.startswith("PLAT-"):
                 # Platform subscription payment
-                logger.info(f"Verifying platform subscription payment: {transaction_id}")
+                logger.info(f"Verifying platform subscription payment: {transaction.reference}")
                 from services.platform_billing_service import PlatformBillingService
                 
                 paystack_secret_key = os.getenv("PAYSTACK_SECRET_KEY", "")
@@ -822,12 +822,12 @@ async def verify_payment_with_paystack(
                 result = await billing_service.verify_and_process_payment(
                     session=session,
                     transaction_id=transaction.id,
-                    reference=transaction_id,
+                    reference=transaction.reference,
                     amount_paid=amount_paid
                 )
                 
                 if result.get("success"):
-                    logger.info(f"Platform subscription payment {transaction_id} processed successfully")
+                    logger.info(f"Platform subscription payment {transaction.reference} processed successfully")
                     return {
                         "success": True,
                         "status": "success",
@@ -846,7 +846,7 @@ async def verify_payment_with_paystack(
                     }
             else:
                 # Individual fee payment
-                logger.info(f"Verifying individual fee payment: {transaction_id}")
+                logger.info(f"Verifying individual fee payment: {transaction.reference}")
                 online_payment_service = services["online_payment"]
                 
                 # Process webhook payload to trigger fee distribution
@@ -861,7 +861,7 @@ async def verify_payment_with_paystack(
                 )
                 
                 if result.get("success"):
-                    logger.info(f"Fee payment {transaction_id} processed successfully with fee distribution")
+                    logger.info(f"Fee payment {transaction.reference} processed successfully with fee distribution")
                     return {
                         "success": True,
                         "status": "success",
@@ -870,7 +870,7 @@ async def verify_payment_with_paystack(
                         "amount": float(transaction.amount)
                     }
                 else:
-                    logger.error(f"Failed to process fee payment {transaction_id}: {result.get('error')}")
+                    logger.error(f"Failed to process fee payment {transaction.reference}: {result.get('error')}")
                     return {
                         "success": False,
                         "status": "error",
