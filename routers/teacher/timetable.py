@@ -116,7 +116,8 @@ async def get_my_timetable(
             )
             subject = subject_result.scalar()
             
-            day_name = entry.day_of_week or "Monday"
+            # Convert Enum to string and title case to match dict keys
+            day_name = (entry.day_of_week.value if entry.day_of_week else "monday").title()
             
             schedule_entry = {
                 "class_id": entry.class_id,
@@ -243,7 +244,8 @@ async def get_class_timetable(
             )
             staff = staff_result.scalar()
             
-            day_name = entry.day_of_week or "Monday"
+            # Convert Enum to string and title case to match dict keys
+            day_name = (entry.day_of_week.value if entry.day_of_week else "monday").title()
             
             schedule_entry = {
                 "subject_id": entry.subject_id,
