@@ -146,7 +146,7 @@ class OnlinePaymentService:
                 
                 return {
                     "success": True,
-                    "transaction_id": transaction_id,
+                    "transaction_id": str(transaction.id),  # Return UUID, not reference
                     "payment_url": paystack_result["authorization_url"],
                     "reference": paystack_result["reference"],
                     "amount": payment_amount
