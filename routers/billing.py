@@ -350,6 +350,119 @@ async def initiate_subscription_payment(
     return result
 
 
+@router.get("/subscriptions/{subscription_id}/payment-status/{transaction_id}", status_code=200)
+async def get_subscription_payment_status(
+    subscription_id: str,
+    transaction_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    """
+    Get payment status for a subscription payment transaction
+    
+    **Auth Required:** Authenticated user
+    
+    **Path Parameters:**
+    - subscription_id: UUID of the subscription
+    - transaction_id: UUID of the transaction (from payment initialization)
+    
+    **Response:**
+    ```json
+    {
+        "status": "pending|processing|success|failed",
+        "message": "Payment status",
+        "amount": 8400.00,
+        "reference": "PLAT-xxx",
+        "updated_at": "2026-04-16T10:30:00"
+    }
+    ```
+    
+    **Errors:**
+    - 404: Transaction or subscription not found
+    - 403: Not authorized to view this transaction
+    """
+    
+    try:
+        if not current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User must be associated with a school"
+            )
+        
+        # Get subscription to verify access and fee_id
+        sub_result = await session.execute(
+            select(PlatformSubscription).where(
+                PlatformSubscription.id == subscription_id
+            )
+        )
+        subscription = sub_result.scalar_one_or_none()
+        
+        if not subscription:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Subscription not found"
+            )
+        
+        # Verify school access
+        if subscription.school_id != current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this subscription"
+            )
+        
+        # Get transaction by database ID
+        # transaction_id here is the database UUID returned from payment initialization
+        txn_result = await session.execute(
+            select(OnlineTransaction).where(
+                OnlineTransaction.id == transaction_id
+            )
+        )
+        transaction = txn_result.scalar_one_or_none()
+        
+        if not transaction:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Transaction not found"
+            )
+        
+        # Verify transaction belongs to this subscription
+        if transaction.fee_id != subscription_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Transaction does not belong to this subscription"
+            )
+        
+        # Build response based on transaction status
+        response = {
+            "status": transaction.status.value,
+            "message": "",
+            "amount": float(transaction.amount),
+            "reference": transaction.reference,
+            "updated_at": transaction.updated_at.isoformat() if transaction.updated_at else transaction.created_at.isoformat()
+        }
+        
+        if transaction.status == TransactionStatus.SUCCESS:
+            response["message"] = "Payment successful"
+            response["completed_at"] = transaction.completed_at.isoformat() if transaction.completed_at else None
+        elif transaction.status == TransactionStatus.FAILED:
+            response["message"] = transaction.failed_reason or "Payment failed"
+        elif transaction.status == TransactionStatus.PROCESSING:
+            response["message"] = "Payment processing"
+        else:  # PENDING
+            response["message"] = "Payment pending - waiting for confirmation"
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting subscription payment status: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error retrieving payment status"
+        )
+
+
 # ============================================================================
 # ENDPOINTS - DASHBOARDS & METRICS
 # ============================================================================
@@ -427,125 +540,6 @@ async def get_subscription_metrics(
             )
     
     return metrics.dict()
-
-
-# ============================================================================
-# ENDPOINTS - WEBHOOK (PAYSTACK CALLBACK)
-# ============================================================================
-
-@router.post("/webhook/paystack", status_code=200)
-async def handle_paystack_webhook(
-    request: Request,
-    session: AsyncSession = Depends(get_session),
-    billing_service: PlatformBillingService = Depends(get_billing_service)
-) -> dict:
-    """
-    Handle Paystack webhook callback for platform subscription payments
-    
-    **Note:** This endpoint does NOT require authentication
-    **Security:** Paystack signature is verified
-    
-    **Webhook Event:**
-    Paystack sends POST request to this endpoint on successful/failed payment
-    """
-    
-    try:
-        # Get webhook body
-        body = await request.body()
-        payload = json.loads(body)
-        
-        logger.info(f"Paystack webhook received: event={payload.get('event')}, data keys={list(payload.get('data', {}).keys())}")
-        
-        # Verify Paystack signature
-        paystack_secret = os.getenv("PAYSTACK_SECRET_KEY", "")
-        signature = request.headers.get("x-paystack-signature", "")
-        
-        # Verify signature (implementation depends on Paystack client)
-        # For now, we'll trust the reference and amount
-        
-        if payload.get("event") != "charge.success":
-            logger.info(f"Ignoring webhook event: {payload.get('event')}")
-            return {"status": "ok"}
-        
-        # Extract payment details
-        data = payload.get("data", {})
-        reference = data.get("reference")
-        amount = data.get("amount")
-        status_val = data.get("status")
-        customer_email = data.get("customer", {}).get("email") if isinstance(data.get("customer"), dict) else None
-        paystack_ref = data.get("reference")
-        
-        # Convert amount from kobo to GHS
-        if amount:
-            amount = amount / 100
-        
-        logger.info(f"Webhook payment details - Reference: {reference}, Amount: {amount}, Status: {status_val}, Email: {customer_email}")
-        
-        if status_val != "success":
-            logger.info(f"Payment unsuccessful: {reference}")
-            return {"status": "ok"}
-        
-        # Validate reference exists
-        if not reference:
-            logger.warning("Webhook missing reference - attempting fallback by email and amount")
-            
-            # Fallback: match by email and amount if reference is missing
-            if customer_email and amount:
-                txn_result = await session.execute(
-                    select(OnlineTransaction).where(
-                        (OnlineTransaction.payer_email == customer_email) &
-                        (OnlineTransaction.amount == amount) &
-                        (OnlineTransaction.status == TransactionStatus.PENDING)
-                    ).order_by(OnlineTransaction.created_at.desc())
-                )
-                transaction = txn_result.scalars().first()
-                
-                if transaction:
-                    reference = transaction.reference
-                    logger.info(f"Matched transaction by email/amount fallback: {reference}")
-            
-            if not reference:
-                logger.error("Could not match transaction - no reference and email/amount fallback failed")
-                return {"status": "ok"}
-        
-        # Get transaction
-        txn_result = await session.execute(
-            select(OnlineTransaction).where(
-                OnlineTransaction.reference == reference
-            )
-        )
-        transaction = txn_result.scalar_one_or_none()
-        
-        if not transaction:
-            logger.warning(f"Transaction not found for reference: {reference}")
-            return {"status": "ok"}
-        
-        # Check if it's a platform subscription payment
-        if not transaction.fee_id.startswith("sub-"):
-            logger.info(f"Not a platform subscription payment: {reference}")
-            return {"status": "ok"}
-        
-        logger.info(f"Processing subscription payment: reference={reference}, amount={amount}, transaction_id={transaction.id}")
-        
-        # Verify and process
-        result = await billing_service.verify_and_process_payment(
-            session=session,
-            transaction_id=transaction.id,
-            reference=reference,
-            amount_paid=amount
-        )
-        
-        if result.get("success"):
-            logger.info(f"Webhook processed successfully: {reference}")
-        else:
-            logger.error(f"Webhook processing failed: {result.get('error')}")
-        
-        return {"status": "ok"}
-        
-    except Exception as e:
-        logger.error(f"Webhook error: {str(e)}", exc_info=True)
-        # Return 200 OK to Paystack to avoid retries, but log the error
-        return {"status": "error", "message": str(e)}
 
 
 # ============================================================================
