@@ -126,8 +126,8 @@ async def get_my_timetable(
                 "period_id": entry.period_id,
                 "period_name": period.name if period else "Unknown",
                 "period_number": period.period_number if period else 0,
-                "start_time": period.start_time.isoformat() if period and period.start_time else None,
-                "end_time": period.end_time.isoformat() if period and period.end_time else None,
+                "start_time": period.start_time if period and period.start_time else None,
+                "end_time": period.end_time if period and period.end_time else None,
             }
             
             schedule_by_day[day_name].append(schedule_entry)
@@ -253,8 +253,8 @@ async def get_class_timetable(
                 "period_id": entry.period_id,
                 "period_name": period.name if period else "Unknown",
                 "period_number": period.period_number if period else 0,
-                "start_time": period.start_time.isoformat() if period and period.start_time else None,
-                "end_time": period.end_time.isoformat() if period and period.end_time else None,
+                "start_time": period.start_time if period and period.start_time else None,
+                "end_time": period.end_time if period and period.end_time else None,
                 "room": entry.room or "Not assigned",
             }
             
@@ -298,8 +298,8 @@ async def get_school_periods(
                 "period_id": p.id,
                 "period_number": p.period_number,
                 "name": p.name,
-                "start_time": p.start_time.isoformat() if p.start_time else None,
-                "end_time": p.end_time.isoformat() if p.end_time else None,
+                "start_time": p.start_time if p.start_time else None,
+                "end_time": p.end_time if p.end_time else None,
             }
             for p in periods
         ]
@@ -396,8 +396,8 @@ async def get_teacher_schedule_by_day(
                 "period_id": entry.period_id,
                 "period_name": period.name if period else "Unknown",
                 "period_number": period.period_number if period else 0,
-                "start_time": period.start_time.isoformat() if period and period.start_time else None,
-                "end_time": period.end_time.isoformat() if period and period.end_time else None,
+                "start_time": period.start_time if period and period.start_time else None,
+                "end_time": period.end_time if period and period.end_time else None,
                 "room": entry.room or "Not assigned",
             }
             
