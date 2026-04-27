@@ -712,7 +712,12 @@ async def verify_payment_with_paystack(
     
     **Purpose**: Direct verification - bypass webhook if not configured
     
-    **Auth Required:** Parent role
+    **Supports**: Both individual fee payments and platform subscription payments
+    
+    **Auth Required:** Parent or Admin role
+    
+    **Path Parameters:**
+    - transaction_id: Transaction reference (e.g., PAY-xxx or PLAT-xxx)
     
     **Returns:**
     ```json
@@ -720,7 +725,8 @@ async def verify_payment_with_paystack(
         "success": true,
         "status": "success|pending|failed",
         "message": "Payment verified",
-        "updated": true/false
+        "updated": true/false,
+        "amount": 500.00
     }
     ```
     """
@@ -745,6 +751,7 @@ async def verify_payment_with_paystack(
         
         # Verify authorization
         if current_user.role == UserRole.PARENT:
+            # Parent can only verify their own fee payments
             parent_result = await session.execute(
                 select(Parent).where(Parent.user_id == current_user.id)
             )
@@ -755,6 +762,12 @@ async def verify_payment_with_paystack(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Not authorized"
                 )
+        elif current_user.role != UserRole.ADMIN:
+            # Only parent or admin can verify
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions"
+            )
         
         # If already success, return immediately
         if transaction.status == TransactionStatus.SUCCESS:
@@ -762,7 +775,8 @@ async def verify_payment_with_paystack(
                 "success": True,
                 "status": "success",
                 "message": "Payment already processed",
-                "updated": False
+                "updated": False,
+                "amount": float(transaction.amount)
             }
         
         # Verify with Paystack API
@@ -779,7 +793,8 @@ async def verify_payment_with_paystack(
                 "success": False,
                 "status": "unknown",
                 "message": "Could not verify with Paystack",
-                "updated": False
+                "updated": False,
+                "amount": float(transaction.amount)
             }
         
         paystack_data = verify_result["data"]
@@ -793,43 +808,76 @@ async def verify_payment_with_paystack(
             
             amount_paid = paystack_data.get("amount", 0) / 100  # Convert from kobo
             
-            # Use online payment service to process the payment (includes fee distribution)
-            online_payment_service = services["online_payment"]
-            
-            # Process webhook payload to trigger fee distribution
-            webhook_payload = {
-                "event": "charge.success",
-                "data": paystack_data
-            }
-            
-            result = await online_payment_service.process_webhook(
-                session=session,
-                payload=webhook_payload
-            )
-            
-            if result.get("success"):
-                logger.info(f"Transaction {transaction_id} processed successfully with fee distribution")
+            # Route based on reference prefix - same as webhook
+            if transaction_id.startswith("PLAT-"):
+                # Platform subscription payment
+                logger.info(f"Verifying platform subscription payment: {transaction_id}")
+                from services.platform_billing_service import PlatformBillingService
                 
-                # Get updated transaction
-                updated_result = await session.execute(
-                    select(OnlineTransaction).where(OnlineTransaction.reference == transaction_id)
+                paystack_secret_key = os.getenv("PAYSTACK_SECRET_KEY", "")
+                if not paystack_secret_key:
+                    raise ValueError("PAYSTACK_SECRET_KEY not configured")
+                
+                billing_service = PlatformBillingService(paystack_secret_key)
+                result = await billing_service.verify_and_process_payment(
+                    session=session,
+                    transaction_id=transaction.id,
+                    reference=transaction_id,
+                    amount_paid=amount_paid
                 )
-                updated_transaction = updated_result.scalar_one_or_none()
                 
-                return {
-                    "success": True,
-                    "status": "success",
-                    "message": "Payment verified and processed",
-                    "updated": True
-                }
+                if result.get("success"):
+                    logger.info(f"Platform subscription payment {transaction_id} processed successfully")
+                    return {
+                        "success": True,
+                        "status": "success",
+                        "message": "Payment verified and processed",
+                        "updated": True,
+                        "amount": float(transaction.amount)
+                    }
+                else:
+                    logger.error(f"Failed to process platform subscription: {result.get('error')}")
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "message": f"Payment verified but processing failed: {result.get('error')}",
+                        "updated": False,
+                        "amount": float(transaction.amount)
+                    }
             else:
-                logger.error(f"Failed to process payment for {transaction_id}: {result.get('error')}")
-                return {
-                    "success": False,
-                    "status": "error",
-                    "message": f"Payment verified but processing failed: {result.get('error')}",
-                    "updated": False
+                # Individual fee payment
+                logger.info(f"Verifying individual fee payment: {transaction_id}")
+                online_payment_service = services["online_payment"]
+                
+                # Process webhook payload to trigger fee distribution
+                webhook_payload = {
+                    "event": "charge.success",
+                    "data": paystack_data
                 }
+                
+                result = await online_payment_service.process_webhook(
+                    session=session,
+                    payload=webhook_payload
+                )
+                
+                if result.get("success"):
+                    logger.info(f"Fee payment {transaction_id} processed successfully with fee distribution")
+                    return {
+                        "success": True,
+                        "status": "success",
+                        "message": "Payment verified and processed",
+                        "updated": True,
+                        "amount": float(transaction.amount)
+                    }
+                else:
+                    logger.error(f"Failed to process fee payment {transaction_id}: {result.get('error')}")
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "message": f"Payment verified but processing failed: {result.get('error')}",
+                        "updated": False,
+                        "amount": float(transaction.amount)
+                    }
         else:
             # Payment not yet successful in Paystack
             logger.info(f"Payment not yet successful in Paystack - status: {paystack_status}")
@@ -837,7 +885,8 @@ async def verify_payment_with_paystack(
                 "success": True,
                 "status": paystack_status or "pending",
                 "message": f"Payment status: {paystack_status or 'pending'}",
-                "updated": False
+                "updated": False,
+                "amount": float(transaction.amount)
             }
     
     except HTTPException:
