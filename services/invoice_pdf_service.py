@@ -182,7 +182,7 @@ class InvoicePDFService:
                     <div class="summary-label">Subtotal:</div>
                     <div class="summary-value">GHS {{ subtotal }}</div>
                 </div>
-                {% if tax_amount > 0 %}
+                {% if tax_amount_numeric > 0 %}
                 <div class="summary-row">
                     <div class="summary-label">Tax (0%):</div>
                     <div class="summary-value">GHS {{ tax_amount }}</div>
@@ -291,19 +291,32 @@ class InvoicePDFService:
         }.get(status, "issued")
 
         return {
+            # Identifiers and metadata
             "invoice_number": invoice.get("invoice_number", "N/A"),
             "school_name": school_name,
             "academic_year": invoice.get("academic_year", "N/A"),
             "term": str(invoice.get("term", "")).capitalize(),
+            "status": status,
+            "status_class": status_class,
+            
+            # Numeric values (for template comparisons)
             "student_count": int(invoice.get("student_count", 0)),
+            "unit_price_numeric": unit_price,
+            "subtotal_numeric": subtotal,
+            "tax_amount_numeric": tax_amount,
+            "total_amount_numeric": total_amount,
+            "amount_paid_numeric": amount_paid,
+            "outstanding_balance_numeric": outstanding,
+            
+            # Formatted values (for display)
             "unit_price": f"{unit_price:.2f}",
             "subtotal": f"{subtotal:.2f}",
             "tax_amount": f"{tax_amount:.2f}",
             "total_amount": f"{total_amount:.2f}",
             "amount_paid": f"{amount_paid:.2f}",
             "outstanding_balance": f"{outstanding:.2f}",
-            "status": status,
-            "status_class": status_class,
+            
+            # Dates
             "issued_date": issued_date.strftime("%B %d, %Y") if issued_date else "N/A",
             "due_date": due_date.strftime("%B %d, %Y") if due_date else "N/A",
             "paid_date": paid_date.strftime("%B %d, %Y") if paid_date else None,
