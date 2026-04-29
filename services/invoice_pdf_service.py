@@ -244,20 +244,44 @@ class InvoicePDFService:
     @staticmethod
     def format_invoice_data(invoice: dict, school_name: str) -> dict:
         """Format invoice data for PDF template"""
+        # Convert all numeric fields to float for safe operations
+        try:
+            total_amount = float(invoice.get("total_amount", 0))
+            amount_paid = float(invoice.get("amount_paid", 0))
+            unit_price = float(invoice.get("unit_price", 0))
+            subtotal = float(invoice.get("subtotal", total_amount))
+            tax_amount = float(invoice.get("tax_amount", 0))
+        except (ValueError, TypeError):
+            # Fallback if conversion fails
+            total_amount = 0
+            amount_paid = 0
+            unit_price = 0
+            subtotal = 0
+            tax_amount = 0
+
         issued_date = invoice.get("issued_at")
         if isinstance(issued_date, str):
-            issued_date = datetime.fromisoformat(issued_date.replace("Z", "+00:00"))
+            try:
+                issued_date = datetime.fromisoformat(issued_date.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                issued_date = None
 
         due_date = invoice.get("due_date")
         if isinstance(due_date, str):
-            due_date = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
+            try:
+                due_date = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                due_date = None
 
         paid_date = invoice.get("paid_at")
         if paid_date and isinstance(paid_date, str):
-            paid_date = datetime.fromisoformat(paid_date.replace("Z", "+00:00"))
+            try:
+                paid_date = datetime.fromisoformat(paid_date.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                paid_date = None
 
         status = invoice.get("status", "ISSUED")
-        outstanding = invoice.get("total_amount", 0) - invoice.get("amount_paid", 0)
+        outstanding = max(0, total_amount - amount_paid)
 
         status_class = {
             "PAID": "paid",
@@ -270,13 +294,13 @@ class InvoicePDFService:
             "invoice_number": invoice.get("invoice_number", "N/A"),
             "school_name": school_name,
             "academic_year": invoice.get("academic_year", "N/A"),
-            "term": invoice.get("term", "").capitalize(),
-            "student_count": invoice.get("student_count", 0),
-            "unit_price": f"{invoice.get('unit_price', 0):.2f}",
-            "subtotal": f"{invoice.get('subtotal', invoice.get('total_amount', 0)):.2f}",
-            "tax_amount": f"{invoice.get('tax_amount', 0):.2f}",
-            "total_amount": f"{invoice.get('total_amount', 0):.2f}",
-            "amount_paid": f"{invoice.get('amount_paid', 0):.2f}",
+            "term": str(invoice.get("term", "")).capitalize(),
+            "student_count": int(invoice.get("student_count", 0)),
+            "unit_price": f"{unit_price:.2f}",
+            "subtotal": f"{subtotal:.2f}",
+            "tax_amount": f"{tax_amount:.2f}",
+            "total_amount": f"{total_amount:.2f}",
+            "amount_paid": f"{amount_paid:.2f}",
             "outstanding_balance": f"{outstanding:.2f}",
             "status": status,
             "status_class": status_class,
