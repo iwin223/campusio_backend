@@ -222,6 +222,7 @@ async def import_contracts_csv(
         )
 
 
+@router.get("/contracts", response_model=dict)
 async def list_payroll_contracts(
     staff_id: Optional[str] = None,
     active_only: bool = Query(True),
