@@ -11,7 +11,8 @@ from pydantic import BaseModel
 from database import get_session
 from auth import get_current_user
 from models.user import User
-from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification
+from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification 
+from models.finance import GLAccount, JournalLineItem, JournalEntry, PostingStatus, AccountType
 from models.fee import Fee, PaymentStatus as FeeStatus
 from models.student import Student
 
@@ -67,7 +68,7 @@ async def get_dashboard_metrics(
             )
         
         # Import models
-        from models.finance import GLAccount, JournalLineItem, JournalEntry, PostingStatus, AccountType
+        
         
         # Get all GL accounts for this school
         account_query = select(GLAccount).where(
