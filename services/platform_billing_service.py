@@ -338,9 +338,12 @@ class PlatformBillingService:
                 )
                 invoice = inv_result.scalar_one_or_none()
                 if invoice:
-                    invoice.amount_paid = amount_paid
-                    invoice.paid_at = datetime.utcnow()
-                    invoice.status = "PAID" if amount_paid >= invoice.total_amount else "PARTIAL"
+                    invoice.amount_paid += amount_paid
+                    if invoice.amount_paid >= invoice.total_amount:
+                        invoice.status = "PAID"
+                        invoice.paid_at = datetime.utcnow()
+                    else:
+                        invoice.status = "PARTIAL"
             
             await session.commit()
             
