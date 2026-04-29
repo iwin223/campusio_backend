@@ -551,6 +551,7 @@ async def get_payments(
             OnlineTransaction.reference,
             Student.name,
             User.first_name,
+            User.last_name,
             User.email,
             User.phone,
             Fee.fee_type,
@@ -621,15 +622,15 @@ async def get_payments(
                     "transaction_id": p[0],
                     "reference": p[1],
                     "student_name": p[2],
-                    "parent_name": f"{p[3]} {getattr(Parent, 'last_name', '')}",
-                    "parent_email": p[4],
-                    "parent_phone": p[5],
-                    "fee_type": p[6],
-                    "amount": float(p[7]),
-                    "status": p[8],
-                    "initiated_at": p[9],
-                    "completed_at": p[10],
-                    "verified_at": p[11]
+                    "parent_name": f"{p[3]} {p[4] or ''}" if p[3] else 'Unknown',
+                    "parent_email": p[5],
+                    "parent_phone": p[6],
+                    "fee_type": p[7],
+                    "amount": float(p[8]),
+                    "status": p[9],
+                    "initiated_at": p[10],
+                    "completed_at": p[11],
+                    "verified_at": p[12]
                 }
                 for p in payments
             ]
