@@ -6,12 +6,13 @@ from typing import List
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import StreamingResponse
 from sqlmodel import select
 
 from database import get_session
 from auth import get_current_user
 from models.user import User, UserRole
-from models.school import AcademicTerm
+from models.school import AcademicTerm, School
 from models.billing import (
     PlatformSubscription, SubscriptionInvoice,
     PlatformSubscriptionResponse, SubscriptionInvoiceResponse,
@@ -270,6 +271,104 @@ async def get_school_invoices(
         "offset": offset,
         "data": [inv.dict() for inv in invoices]
     }
+
+
+@router.get("/invoices/{invoice_id}/download", status_code=200)
+async def download_invoice_pdf(
+    invoice_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    billing_service: PlatformBillingService = Depends(get_billing_service)
+):
+    """
+    Download invoice as PDF
+    
+    **Auth Required:** Authenticated user
+    
+    **Path Parameters:**
+    - invoice_id: UUID of the invoice
+    
+    **Returns:**
+    PDF file as attachment
+    """
+    from services.invoice_pdf_service import InvoicePDFService
+    from models.billing import SubscriptionInvoice
+    from starlette.responses import StreamingResponse
+    
+    try:
+        if not current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User must be associated with a school"
+            )
+        
+        # Get invoice
+        invoice_result = await session.execute(
+            select(SubscriptionInvoice).where(
+                SubscriptionInvoice.id == invoice_id,
+                SubscriptionInvoice.school_id == current_user.school_id
+            )
+        )
+        invoice = invoice_result.scalar_one_or_none()
+        
+        if not invoice:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Invoice not found"
+            )
+        
+        # Get school name
+        from models.school import School
+        school_result = await session.execute(
+            select(School).where(School.id == current_user.school_id)
+        )
+        school = school_result.scalar_one_or_none()
+        school_name = school.name if school else "School"
+        
+        # Convert invoice to dict
+        invoice_dict = {
+            "id": invoice.id,
+            "invoice_number": invoice.invoice_number,
+            "academic_year": invoice.academic_year,
+            "term": invoice.term,
+            "student_count": invoice.student_count,
+            "unit_price": float(invoice.unit_price),
+            "subtotal": float(invoice.subtotal),
+            "tax_amount": float(invoice.tax_amount),
+            "total_amount": float(invoice.total_amount),
+            "amount_paid": float(invoice.amount_paid),
+            "status": invoice.status,
+            "issued_at": invoice.issued_at,
+            "due_date": invoice.due_date,
+            "paid_at": invoice.paid_at
+        }
+        
+        # Generate PDF
+        pdf_service = InvoicePDFService()
+        pdf_bytes = pdf_service.generate_pdf(invoice_dict, school_name)
+        
+        if not pdf_bytes or len(pdf_bytes) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to generate PDF"
+            )
+        
+        # Return as downloadable PDF
+        filename = f"invoice_{invoice.invoice_number}.pdf"
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating invoice PDF: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate PDF: {str(e)}"
+        )
 
 
 # ============================================================================
