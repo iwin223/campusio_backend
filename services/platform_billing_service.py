@@ -338,12 +338,29 @@ class PlatformBillingService:
                 )
                 invoice = inv_result.scalar_one_or_none()
                 if invoice:
-                    invoice.amount_paid += amount_paid
-                    if invoice.amount_paid >= invoice.total_amount:
+                    # Ensure all amounts are floats for proper comparison
+                    old_amount_paid = float(invoice.amount_paid)
+                    total_inv_amount = float(invoice.total_amount)
+                    
+                    invoice.amount_paid = old_amount_paid + float(amount_paid)
+                    
+                    # Use small tolerance for float comparison (0.01 GHS)
+                    remaining_balance = total_inv_amount - invoice.amount_paid
+                    
+                    logger.info(
+                        f"Invoice {invoice.invoice_number}: "
+                        f"Total={total_inv_amount}, "
+                        f"Paid={invoice.amount_paid}, "
+                        f"Remaining={remaining_balance}"
+                    )
+                    
+                    if remaining_balance <= 0.01:  # Essentially fully paid
                         invoice.status = "PAID"
                         invoice.paid_at = datetime.utcnow()
+                        logger.info(f"✓ Invoice {invoice.invoice_number} marked as PAID")
                     else:
                         invoice.status = "PARTIAL"
+                        logger.info(f"⚠ Invoice {invoice.invoice_number} marked as PARTIAL (remaining: GHS {remaining_balance:.2f})")
             
             await session.commit()
             
