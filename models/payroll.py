@@ -242,3 +242,131 @@ class PayslipResponse(SQLModel):
     
     generated_at: datetime
     posted_at: Optional[datetime] = None
+
+
+# ==================== Deduction Rules Models ====================
+
+class RuleOperator(str, Enum):
+    """Operators for rule conditions"""
+    EQUALS = "equals"
+    GREATER_THAN = "greater_than"
+    LESS_THAN = "less_than"
+    GREATER_EQUAL = "greater_equal"
+    LESS_EQUAL = "less_equal"
+    BETWEEN = "between"
+    CONTAINS = "contains"
+
+
+class RuleType(str, Enum):
+    """Types of deduction rules"""
+    SALARY_BRACKET = "salary_bracket"  # Deduction based on salary range
+    YEARS_SERVICE = "years_service"    # Deduction based on tenure
+    ATTENDANCE = "attendance"          # Deduction based on attendance
+    CUSTOM = "custom"                  # Custom rule with expression
+
+
+class DeductionRule(SQLModel, table=True):
+    """Automatic deduction rules for payroll processing"""
+    __tablename__ = "deduction_rules"
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    school_id: str = Field(index=True)
+    
+    # Basic info
+    name: str = Field(index=True)  # e.g., "Pension Bracket A"
+    description: Optional[str] = None
+    rule_type: RuleType = Field(index=True)
+    
+    # Rule conditions
+    operator: RuleOperator  # How to evaluate the condition
+    condition_field: str    # What field to check (e.g., "basic_salary", "years_service", "absent_days")
+    condition_value_min: Optional[float] = None  # Lower bound or single value
+    condition_value_max: Optional[float] = None  # Upper bound (for BETWEEN)
+    
+    # Deduction details
+    deduction_type: str  # "percentage" or "fixed"
+    deduction_amount: float  # Percentage (0-100) or fixed GHS amount
+    deduction_category: str = "other"  # Category name for reporting
+    deduction_description: Optional[str] = None
+    
+    # Rules logic
+    priority: int = Field(default=0, index=True)  # Execution order (higher = earlier)
+    is_active: bool = Field(default=True, index=True)
+    
+    # Optional conditional expression for complex rules
+    # Example: "basic_salary > 5000 and years_service > 5"
+    expression: Optional[str] = None  # JSON-serializable condition tree
+    
+    # Audit
+    created_by: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DeductionRuleCreate(SQLModel):
+    """Validation model for creating deduction rules"""
+    name: str
+    description: Optional[str] = None
+    rule_type: RuleType
+    
+    operator: RuleOperator
+    condition_field: str
+    condition_value_min: Optional[float] = None
+    condition_value_max: Optional[float] = None
+    
+    deduction_type: str  # "percentage" or "fixed"
+    deduction_amount: float
+    deduction_category: str = "other"
+    deduction_description: Optional[str] = None
+    
+    priority: int = 0
+    expression: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DeductionRuleUpdate(SQLModel):
+    """Validation model for updating deduction rules"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    operator: Optional[RuleOperator] = None
+    condition_field: Optional[str] = None
+    condition_value_min: Optional[float] = None
+    condition_value_max: Optional[float] = None
+    deduction_type: Optional[str] = None
+    deduction_amount: Optional[float] = None
+    deduction_category: Optional[str] = None
+    deduction_description: Optional[str] = None
+    priority: Optional[int] = None
+    is_active: Optional[bool] = None
+    expression: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DeductionRuleResponse(SQLModel):
+    """Response model for deduction rules"""
+    id: str
+    school_id: str
+    name: str
+    description: Optional[str]
+    rule_type: RuleType
+    operator: RuleOperator
+    condition_field: str
+    condition_value_min: Optional[float]
+    condition_value_max: Optional[float]
+    deduction_type: str
+    deduction_amount: float
+    deduction_category: str
+    priority: int
+    is_active: bool
+    created_at: datetime
+
+
+class RuleEvaluationResult(SQLModel):
+    """Result of evaluating a rule against staff data"""
+    rule_id: str
+    rule_name: str
+    matched: bool
+    deduction_amount: float
+    deduction_type: str
+    reason: Optional[str] = None

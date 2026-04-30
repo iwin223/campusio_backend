@@ -11,6 +11,7 @@ from models.staff import Staff, StaffCreate, StaffType, StaffStatus, TeacherAssi
 from models.classroom import Class, Subject
 from models.school import School
 from models.user import User, UserRole
+from models.payroll import PayrollContract
 from database import get_session
 from auth import get_current_user, require_roles, get_password_hash
 from services.csv_import_service import CSVImportService
@@ -197,25 +198,43 @@ async def list_staff(
     result = await session.execute(query)
     staff_list = result.scalars().all()
     
+    # Build response with payroll contract info
+    staff_items = []
+    for s in staff_list:
+        # Fetch active payroll contract for this staff
+        contract_result = await session.execute(
+            select(PayrollContract).where(
+                PayrollContract.staff_id == s.id,
+                PayrollContract.school_id == s.school_id,
+                PayrollContract.is_active == True
+            ).order_by(PayrollContract.effective_from.desc()).limit(1)
+        )
+        contract = contract_result.scalar_one_or_none()
+        
+        staff_item = {
+            "id": s.id,
+            "school_id": s.school_id,
+            "staff_id": s.staff_id,
+            "first_name": s.first_name,
+            "last_name": s.last_name,
+            "full_name": f"{s.first_name} {s.last_name}",
+            "email": s.email,
+            "phone": s.phone,
+            "staff_type": s.staff_type,
+            "position": s.position,
+            "department": s.department,
+            "status": s.status,
+            "photo_url": s.photo_url,
+            "payroll_contract": {
+                "basic_salary": float(contract.basic_salary),
+                "tax_rate_percent": float(contract.tax_rate_percent),
+                "pension_rate_percent": float(contract.pension_rate_percent)
+            } if contract else None
+        }
+        staff_items.append(staff_item)
+    
     return {
-        "items": [
-            {
-                "id": s.id,
-                "school_id": s.school_id,
-                "staff_id": s.staff_id,
-                "first_name": s.first_name,
-                "last_name": s.last_name,
-                "full_name": f"{s.first_name} {s.last_name}",
-                "email": s.email,
-                "phone": s.phone,
-                "staff_type": s.staff_type,
-                "position": s.position,
-                "department": s.department,
-                "status": s.status,
-                "photo_url": s.photo_url
-            }
-            for s in staff_list
-        ],
+        "items": staff_items,
         "total": total,
         "page": page,
         "limit": limit,

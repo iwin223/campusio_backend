@@ -16,6 +16,7 @@ from models.user import User
 from models.finance import (
     JournalEntryCreate, JournalLineItemCreate, ReferenceType
 )
+from services.deduction_rules_service import RulesEvaluationService
 
 logger = logging.getLogger(__name__)
 
@@ -407,6 +408,9 @@ class PayrollService:
             line_items_created = 0
             errors = []
             
+            # Initialize rules service for deduction rule evaluation
+            rules_service = RulesEvaluationService(self.session)
+            
             for staff in staff_list:
                 try:
                     # Get active contract for staff
@@ -417,6 +421,47 @@ class PayrollService:
                     
                     # Calculate payroll for this staff
                     calculation = self.calculate_payroll_for_staff(contract)
+                    
+                    # Prepare metadata for rule evaluation
+                    staff_metadata = {
+                        "staff_id": staff.id,
+                        "basic_salary": float(contract.basic_salary),
+                        "years_service": 0,  # TODO: Calculate from employment date
+                        "absent_days": 0,  # TODO: Get from attendance records
+                        "present_days": 0  # TODO: Get from attendance records
+                    }
+                    
+                    # Apply deduction rules
+                    applied_rules = []
+                    rule_deductions = 0.0
+                    try:
+                        rule_results = await rules_service.evaluate_rules_for_staff(
+                            staff_id=staff.id,
+                            basic_salary=float(contract.basic_salary),
+                            period_year=year,
+                            period_month=month,
+                            staff_metadata=staff_metadata
+                        )
+                        
+                        for result in rule_results:
+                            if result.matched:
+                                applied_rules.append({
+                                    "rule_id": result.rule_id,
+                                    "rule_name": result.rule_name,
+                                    "deduction_amount": result.deduction_amount,
+                                    "category": result.deduction_category
+                                })
+                                rule_deductions += result.deduction_amount
+                    except Exception as e:
+                        logger.warning(f"Error evaluating rules for staff {staff.id}: {str(e)}")
+                        # Continue without rules if error occurs
+                    
+                    # Add rule deductions to total
+                    total_rule_deductions = rule_deductions
+                    calculation["total_deductions"] += total_rule_deductions
+                    calculation["net_amount"] = calculation["gross_amount"] - calculation["total_deductions"]
+                    calculation["breakdown"]["applied_rules"] = applied_rules
+                    calculation["breakdown"]["rule_deductions"] = total_rule_deductions
                     
                     # Create line item
                     line_item = PayrollLineItem(

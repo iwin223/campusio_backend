@@ -52,6 +52,7 @@ async def register_routers(app: FastAPI):
     from routers.transport import router as transport_router
     from routers.hostel import router as hostel_router
     from routers.payroll import router as payroll_router
+    from routers.deduction_rules import router as deduction_rules_router
     from routers.finance.coa import router as coa_router
     from routers.finance.journal import router as journal_router
     from routers.finance.expenses import router as expenses_router
@@ -87,6 +88,7 @@ async def register_routers(app: FastAPI):
     app.include_router(transport_router, prefix="/api")
     app.include_router(hostel_router, prefix="/api")
     app.include_router(payroll_router, prefix="/api")
+    app.include_router(deduction_rules_router, prefix="/api")
     app.include_router(coa_router, prefix="/api")
     app.include_router(journal_router, prefix="/api")
     app.include_router(expenses_router, prefix="/api")

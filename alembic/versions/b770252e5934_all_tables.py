@@ -1,8 +1,8 @@
 """all_tables
 
-Revision ID: 74142d3454a8
+Revision ID: b770252e5934
 Revises: 
-Create Date: 2026-04-24 11:31:12.934077
+Create Date: 2026-04-30 08:22:53.762899
 
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ import sqlmodel
 
 
 # revision identifiers, used by Alembic.
-revision: str = '74142d3454a8'
+revision: str = 'b770252e5934'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -176,6 +176,36 @@ def upgrade() -> None:
     with op.batch_alter_table('classes', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_classes_academic_term_id'), ['academic_term_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_classes_school_id'), ['school_id'], unique=False)
+
+    op.create_table('deduction_rules',
+    sa.Column('id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('school_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('description', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('rule_type', sa.Enum('SALARY_BRACKET', 'YEARS_SERVICE', 'ATTENDANCE', 'CUSTOM', name='ruletype'), nullable=False),
+    sa.Column('operator', sa.Enum('EQUALS', 'GREATER_THAN', 'LESS_THAN', 'GREATER_EQUAL', 'LESS_EQUAL', 'BETWEEN', 'CONTAINS', name='ruleoperator'), nullable=False),
+    sa.Column('condition_field', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('condition_value_min', sa.Float(), nullable=True),
+    sa.Column('condition_value_max', sa.Float(), nullable=True),
+    sa.Column('deduction_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('deduction_amount', sa.Float(), nullable=False),
+    sa.Column('deduction_category', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('deduction_description', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('priority', sa.Integer(), nullable=False),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('expression', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('created_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('notes', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
+    with op.batch_alter_table('deduction_rules', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_deduction_rules_is_active'), ['is_active'], unique=False)
+        batch_op.create_index(batch_op.f('ix_deduction_rules_name'), ['name'], unique=False)
+        batch_op.create_index(batch_op.f('ix_deduction_rules_priority'), ['priority'], unique=False)
+        batch_op.create_index(batch_op.f('ix_deduction_rules_rule_type'), ['rule_type'], unique=False)
+        batch_op.create_index(batch_op.f('ix_deduction_rules_school_id'), ['school_id'], unique=False)
 
     op.create_table('discount_rules',
     sa.Column('id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
@@ -1988,6 +2018,14 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_discount_rules_school_id'))
 
     op.drop_table('discount_rules')
+    with op.batch_alter_table('deduction_rules', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_deduction_rules_school_id'))
+        batch_op.drop_index(batch_op.f('ix_deduction_rules_rule_type'))
+        batch_op.drop_index(batch_op.f('ix_deduction_rules_priority'))
+        batch_op.drop_index(batch_op.f('ix_deduction_rules_name'))
+        batch_op.drop_index(batch_op.f('ix_deduction_rules_is_active'))
+
+    op.drop_table('deduction_rules')
     with op.batch_alter_table('classes', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_classes_school_id'))
         batch_op.drop_index(batch_op.f('ix_classes_academic_term_id'))

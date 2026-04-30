@@ -11,9 +11,11 @@ from routers.timetable import router as timetable_router
 from routers.communication import router as communication_router
 from routers.dashboard import router as dashboard_router
 from routers.payroll import router as payroll_router
+from routers.deduction_rules import router as deduction_rules_router
 
 __all__ = [
     "auth_router", "schools_router", "students_router", "staff_router",
     "classes_router", "attendance_router", "grades_router", "fees_router",
-    "timetable_router", "communication_router", "dashboard_router", "payroll_router"
+    "timetable_router", "communication_router", "dashboard_router", "payroll_router",
+    "deduction_rules_router"
 ]
