@@ -92,7 +92,7 @@ class FiscalPeriod(SQLModel, table=True):
 class FiscalPeriodCreate(SQLModel):
     """Validation model for creating fiscal periods"""
     period_name: str
-    period_type: FiscalPeriodType
+    period_type: FiscalPeriodType = FiscalPeriodType.MONTHLY
     start_date: datetime
     end_date: datetime
     fiscal_year: int
