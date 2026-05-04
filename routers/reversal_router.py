@@ -18,7 +18,7 @@ from auth import get_current_user
 from database import get_session
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/reversals", tags=["Reversals"])
+router = APIRouter(prefix="/reversals", tags=["Reversals"])
 
 
 # ==================== Full Reversal ====================

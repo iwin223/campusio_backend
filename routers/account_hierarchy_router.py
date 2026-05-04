@@ -24,7 +24,7 @@ from dependencies import get_current_school_id
 from auth import get_current_user 
 from database import get_session
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/account-hierarchy", tags=["Account Hierarchy"])
+router = APIRouter(prefix="/account-hierarchy", tags=["Account Hierarchy"])
 
 
 # ==================== Hierarchy Creation ====================

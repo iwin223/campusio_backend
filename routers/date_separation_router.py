@@ -20,7 +20,7 @@ from auth import get_current_user
 from database import get_session
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/date-separation", tags=["Date Separation"])
+router = APIRouter(prefix="/date-separation", tags=["Date Separation"])
 
 
 # ==================== Period Posting Eligibility ====================

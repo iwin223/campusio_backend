@@ -19,7 +19,7 @@ from auth import get_current_user
 from database import get_session
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/retained-earnings", tags=["Retained Earnings"])
+router = APIRouter(prefix="/retained-earnings", tags=["Retained Earnings"])
 
 
 # ==================== Net Income ====================

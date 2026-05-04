@@ -29,7 +29,7 @@ from auth import get_current_user
 from database import get_session
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/fiscal-periods", tags=["Fiscal Periods"])
+router = APIRouter(prefix="/fiscal-periods", tags=["Fiscal Periods"])
 
 
 # ==================== Create ====================
