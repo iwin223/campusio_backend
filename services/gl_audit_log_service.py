@@ -17,8 +17,8 @@ import json
 from models.finance.gl_audit_log import (
     GLAuditLog,
     AuditActionType,
-    AuditEntityType,
-    GLAuditLogCreate,
+    AuditEntityType
+    
 )
 
 logger = logging.getLogger(__name__)
