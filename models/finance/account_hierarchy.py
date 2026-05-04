@@ -9,10 +9,12 @@ Supports:
 - Consolidated reporting by hierarchy level
 """
 from sqlmodel import SQLModel, Field
-from typing import Optional, List,Dict
+from sqlalchemy import JSON
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 import uuid
+import json
 
 
 class AccountHierarchyType(str, Enum):
@@ -148,7 +150,7 @@ class HierarchyRollup(SQLModel, table=True):
     detail_count: int = 0  # Number of detail accounts in subtree
     
     # Rollup details
-    contribution_from_children: List[Dict] = Field(default=[])  # JSON: child contributions
+    contribution_from_children: Optional[str] = Field(default=None, sa_type=JSON)  # JSON: child contributions
     
     # Audit
     calculated_by: str
