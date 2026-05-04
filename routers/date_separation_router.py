@@ -15,7 +15,9 @@ from datetime import datetime, timedelta
 
 from services.date_separation_service import DateSeparationService, DateSeparationError
 from models.finance import PostingStatus
-from dependencies import get_db, get_current_user, get_current_school_id
+from dependencies import get_current_school_id
+from auth import get_current_user 
+from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/date-separation", tags=["Date Separation"])
@@ -28,7 +30,7 @@ async def check_posting_eligibility(
     posted_date: str,
     is_adjusting_entry: bool = Query(False),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Check if an entry can be posted to a specific date
     
@@ -79,7 +81,7 @@ async def check_posting_eligibility(
 async def get_cutoff_entries(
     period_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get entries with mismatched entry_date and posted_date
     
@@ -114,7 +116,7 @@ async def get_cutoff_entries(
 async def get_accrual_entries(
     period_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get accrual entries (posted before entry_date)
     
@@ -151,7 +153,7 @@ async def get_accrual_entries(
 async def get_adjusting_entries(
     period_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get adjusting entries for a period
     
@@ -185,7 +187,7 @@ async def get_entries_by_entry_date(
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
     posting_status: Optional[str] = Query(None, description="Filter by status"),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get entries by entry_date range (when transaction occurred)
     
@@ -257,7 +259,7 @@ async def get_entries_by_posting_date(
     start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get entries by posted_date range (when posted to GL)
     
@@ -319,7 +321,7 @@ async def get_entries_by_posting_date(
 async def get_date_variance_report(
     period_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Analyze entry_date vs posted_date variance for a period
     

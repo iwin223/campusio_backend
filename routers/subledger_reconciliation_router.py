@@ -22,7 +22,9 @@ from models.finance.subledger_reconciliation import (
     SubLedgerDetailCreate,
     SubLedgerType,
 )
-from dependencies import get_db, get_current_user, get_current_school_id
+from dependencies import get_current_school_id
+from auth import get_current_user 
+from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/subledger-reconciliation", tags=["Sub-Ledger Reconciliation"])
@@ -38,7 +40,7 @@ async def create_subledger_reconciliation(
     notes: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Create a sub-ledger reconciliation and import detail records
     
@@ -102,7 +104,7 @@ async def create_subledger_reconciliation(
 async def auto_match_details(
     reconciliation_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Automatically match detail records to GL postings
     
@@ -151,7 +153,7 @@ async def auto_match_details(
 async def get_aging_analysis(
     reconciliation_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get aging analysis for AR/AP reconciliation
     
@@ -197,7 +199,7 @@ async def get_aging_analysis(
 async def calculate_variance(
     reconciliation_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Calculate variance between detail total and GL control account
     
@@ -236,7 +238,7 @@ async def calculate_variance(
 async def get_unmatched_details(
     reconciliation_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get unmatched detail records
     
@@ -271,7 +273,7 @@ async def get_unmatched_details(
 async def get_reconciliation_summary(
     reconciliation_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get complete sub-ledger reconciliation summary
     
@@ -308,7 +310,7 @@ async def complete_reconciliation(
     reconciliation_id: str,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Mark sub-ledger reconciliation as completed and approved
     

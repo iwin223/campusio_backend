@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
 from services.retained_earnings_service import RetainedEarningsService, RetainedEarningsError
-from dependencies import get_db, get_current_user, get_current_school_id
+from dependencies import get_current_school_id
+from auth import get_current_user 
+from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/retained-earnings", tags=["Retained Earnings"])
@@ -26,7 +28,7 @@ router = APIRouter(prefix="/api/retained-earnings", tags=["Retained Earnings"])
 async def get_net_income(
     period_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Calculate net income for a fiscal period
     
@@ -59,7 +61,7 @@ async def close_fiscal_period(
     period_id: str,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> dict:
     """Close a fiscal period
@@ -119,7 +121,7 @@ async def set_opening_balances(
     to_period_id: str = Query(...),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Set opening balances for next period from previous period close
     
@@ -169,7 +171,7 @@ async def set_opening_balances(
 async def get_post_closing_trial_balance(
     period_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get post-closing trial balance
     
@@ -196,7 +198,7 @@ async def get_post_closing_trial_balance(
 async def verify_period_closed(
     period_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Verify a period is properly closed
     
@@ -222,7 +224,7 @@ async def verify_period_closed(
 @router.get("/balance", response_model=dict)
 async def get_retained_earnings_balance(
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get current retained earnings balance
     

@@ -20,8 +20,9 @@ from models.finance.account_hierarchy import (
     AccountHierarchyType,
     HierarchyLevel,
 )
-from dependencies import get_db, get_current_user, get_current_school_id
-
+from dependencies import get_current_school_id
+from auth import get_current_user 
+from database import get_session
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/account-hierarchy", tags=["Account Hierarchy"])
 
@@ -35,7 +36,7 @@ async def create_hierarchy(
     description: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Create a new account hierarchy
     
@@ -95,7 +96,7 @@ async def create_hierarchy_node(
     gl_account_id: Optional[str] = Query(None),
     sequence: int = Query(0),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Create a hierarchy node
     
@@ -157,7 +158,7 @@ async def add_hierarchy_relationship(
     child_sequence: int = Query(0),
     contribution_percentage: float = Query(100.0),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Add parent-child relationship in hierarchy
     
@@ -209,7 +210,7 @@ async def add_hierarchy_relationship(
 async def rollup_all_nodes(
     hierarchy_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Calculate rollup balances for all nodes in hierarchy
     
@@ -247,7 +248,7 @@ async def rollup_all_nodes(
 async def get_node_balance(
     node_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get calculated balance for a hierarchy node
     
@@ -286,7 +287,7 @@ async def get_hierarchy_tree(
     hierarchy_id: str,
     root_node_id: Optional[str] = Query(None),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get hierarchy tree structure
     
@@ -328,7 +329,7 @@ async def get_hierarchy_tree(
 async def get_consolidated_report(
     hierarchy_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get consolidated report by hierarchy level
     
@@ -371,7 +372,7 @@ async def export_hierarchy_data(
     hierarchy_id: str,
     format: str = Query("json", regex="^(json|csv)$"),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Export hierarchy and balances
     

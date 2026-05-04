@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
 from services.reversal_service import ReversalService, ReversalError
-from dependencies import get_db, get_current_user, get_current_school_id
+from dependencies import get_current_school_id
+from auth import get_current_user 
+from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/reversals", tags=["Reversals"])
@@ -28,7 +30,7 @@ async def reverse_full_entry(
     reversal_notes: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> dict:
     """Reverse an entire posted journal entry
@@ -106,7 +108,7 @@ async def reverse_partial_entry(
     reversal_notes: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> dict:
     """Reverse specific line items from a posted entry
@@ -180,7 +182,7 @@ async def reverse_specific_accounts(
     reversal_notes: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> dict:
     """Reverse postings to specific GL accounts only
@@ -249,7 +251,7 @@ async def reverse_specific_accounts(
 async def get_reversal_chain(
     entry_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get complete reversal chain for an entry
     
@@ -272,7 +274,7 @@ async def get_reversals_for_period(
     start_date: str = Query(...),
     end_date: str = Query(...),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> list:
     """Get all reversals within a date range
     
@@ -307,7 +309,7 @@ async def get_reversal_statistics(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get statistics on reversals
     

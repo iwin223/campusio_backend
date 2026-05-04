@@ -58,6 +58,14 @@ async def register_routers(app: FastAPI):
     from routers.finance.expenses import router as expenses_router
     from routers.finance.reports import router as reports_router
     from routers.finance_reports import router as finance_reports_router
+    from routers.fiscal_period_router import router as fiscal_period_router
+    from routers.gl_audit_log_router import router as gl_audit_log_router
+    from routers.retained_earnings_router import router as retained_earnings_router
+    from routers.date_separation_router import router as date_separation_router
+    from routers.reversal_router import router as reversal_router
+    from routers.bank_reconciliation_router import router as bank_recon_router
+    from routers.subledger_reconciliation_router import router as subledger_router
+    from routers.account_hierarchy_router import router as hierarchy_router
     from routers.payments import router as payments_router
     from routers.teacher.grades import router as teacher_grades_router
     from routers.teacher.attendance import router as teacher_attendance_router
@@ -94,6 +102,14 @@ async def register_routers(app: FastAPI):
     app.include_router(expenses_router, prefix="/api")
     app.include_router(reports_router, prefix="/api")
     app.include_router(finance_reports_router)
+    app.include_router(fiscal_period_router, prefix="/api", tags=["Accounting Compliance"])
+    app.include_router(gl_audit_log_router, prefix="/api", tags=["Accounting Compliance"])
+    app.include_router(retained_earnings_router, prefix="/api", tags=["Accounting Compliance"])
+    app.include_router(date_separation_router, prefix="/api", tags=["Accounting Compliance"])
+    app.include_router(reversal_router, prefix="/api", tags=["Accounting Compliance"])
+    app.include_router(bank_recon_router, prefix="/api", tags=["Accounting Compliance"])
+    app.include_router(subledger_router, prefix="/api", tags=["Accounting Compliance"])
+    app.include_router(hierarchy_router, prefix="/api", tags=["Accounting Compliance"])
     app.include_router(payments_router, prefix="/api")
     app.include_router(settlements_router, prefix="/api")
     app.include_router(teacher_grades_router, prefix="/api")

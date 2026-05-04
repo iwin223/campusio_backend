@@ -18,7 +18,9 @@ from models.finance.gl_audit_log import (
     AuditEntityType,
 )
 from services.gl_audit_log_service import GLAuditLogService
-from dependencies import get_db, get_current_user, get_current_school_id
+from dependencies import get_current_school_id
+from auth import get_current_user 
+from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/audit-logs", tags=["Audit Logs"])
@@ -32,7 +34,7 @@ async def get_entity_audit_logs(
     entity_id: str,
     limit: int = Query(100, ge=1, le=1000),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> list:
     """Get all audit logs for a specific entity
     
@@ -89,7 +91,7 @@ async def get_logs_by_action(
     end_date: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> list:
     """Get audit logs for a specific action type
     
@@ -162,7 +164,7 @@ async def get_user_activity_logs(
     end_date: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> list:
     """Get all audit logs for actions performed by a user
     
@@ -226,7 +228,7 @@ async def get_logs_by_date_range(
     action: Optional[str] = Query(None),
     limit: int = Query(500, ge=1, le=5000),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> list:
     """Get audit logs within a date range
     
@@ -306,7 +308,7 @@ async def get_logs_by_date_range(
 async def get_batch_logs(
     batch_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> list:
     """Get all logs in a batch
     
@@ -343,7 +345,7 @@ async def get_audit_summary(
     start_date: str = Query(...),
     end_date: str = Query(...),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get summary of audit activity within a date range
     
@@ -376,7 +378,7 @@ async def get_recent_activity(
     hours: int = Query(24, ge=1, le=720),
     limit: int = Query(50, ge=1, le=500),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> list:
     """Get recent GL audit activity (useful for dashboards)
     
@@ -413,7 +415,7 @@ async def export_audit_trail(
     entity_id: str,
     format: str = Query("list"),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Export complete audit trail for an entity
     

@@ -24,7 +24,9 @@ from services.fiscal_period_service import (
     FiscalPeriodError,
     FiscalPeriodValidationError,
 )
-from dependencies import get_db, get_current_user, get_current_school_id
+from dependencies import get_current_school_id
+from auth import get_current_user 
+from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/fiscal-periods", tags=["Fiscal Periods"])
@@ -37,7 +39,7 @@ async def create_fiscal_period(
     period_data: FiscalPeriodCreate,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> dict:
     """Create a new fiscal period
@@ -94,7 +96,7 @@ async def create_fiscal_period(
 async def get_fiscal_period(
     period_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get a fiscal period by ID
     
@@ -137,7 +139,7 @@ async def list_fiscal_periods(
     status: Optional[str] = Query(None),
     fiscal_year: Optional[int] = Query(None),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> list:
     """List fiscal periods with optional filtering
     
@@ -187,7 +189,7 @@ async def list_fiscal_periods(
 @router.get("/current", response_model=dict)
 async def get_current_fiscal_period(
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get the current open fiscal period
     
@@ -223,7 +225,7 @@ async def get_current_fiscal_period(
 async def get_period_by_date(
     date_str: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get fiscal period containing a specific date
     
@@ -268,7 +270,7 @@ async def lock_fiscal_period(
     notes: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Lock a fiscal period (end of audit, before closing)
     
@@ -322,7 +324,7 @@ async def close_fiscal_period(
     notes: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Close a fiscal period (after closing entries are posted)
     
@@ -375,7 +377,7 @@ async def set_current_period(
     period_id: str,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Set a period as the current posting period
     
@@ -411,7 +413,7 @@ async def set_current_period(
 @router.get("/summary", response_model=dict)
 async def get_period_summary(
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get summary of all fiscal periods
     
@@ -431,7 +433,7 @@ async def check_if_can_post_to_period(
     period_id: str,
     is_adjustment_entry: bool = Query(False),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Check if transactions can be posted to a period
     

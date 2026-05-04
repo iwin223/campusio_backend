@@ -23,7 +23,9 @@ from models.finance.bank_reconciliation import (
     BankReconciliationCreate,
     BankTransactionType,
 )
-from dependencies import get_db, get_current_user, get_current_school_id
+from dependencies import get_current_school_id
+from auth import get_current_user 
+from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/bank-reconciliation", tags=["Bank Reconciliation"])
@@ -40,7 +42,7 @@ async def import_bank_statement(
     transactions: List[BankStatementCreate] = None,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Import a bank statement with transactions
     
@@ -105,7 +107,7 @@ async def auto_match_transactions(
     reconciliation_id: str,
     matching_window_days: int = Query(5),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Automatically match bank transactions to GL entries
     
@@ -157,7 +159,7 @@ async def manually_match_transaction(
     variance_reason: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Manually match a bank transaction to GL entry
     
@@ -208,7 +210,7 @@ async def manually_match_transaction(
 async def calculate_variance(
     reconciliation_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Calculate variance between GL balance and bank balance
     
@@ -244,7 +246,7 @@ async def calculate_variance(
 async def get_reconciling_items(
     reconciliation_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get reconciling items (outstanding checks, deposits in transit)
     
@@ -281,7 +283,7 @@ async def get_reconciling_items(
 async def get_reconciliation_summary(
     reconciliation_id: str,
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get complete reconciliation summary
     
@@ -318,7 +320,7 @@ async def complete_reconciliation(
     reconciliation_id: str,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Mark reconciliation as completed and approved
     
