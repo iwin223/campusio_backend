@@ -9,7 +9,7 @@ Supports:
 - Consolidated reporting by hierarchy level
 """
 from sqlmodel import SQLModel, Field
-from typing import Optional, List
+from typing import Optional, List,Dict
 from datetime import datetime
 from enum import Enum
 import uuid
