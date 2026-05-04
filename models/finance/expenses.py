@@ -68,15 +68,20 @@ class Expense(SQLModel, table=True):
     # Dates
     expense_date: datetime = Field(index=True)  # When was expense incurred
     approved_date: Optional[datetime] = None
-    posted_date: Optional[datetime] = None
+    approved_by: Optional[str] = None  # Admin who approved
+    posted_date: Optional[datetime] = None  # When posted to GL ⭐ NEW
+    posted_by: Optional[str] = None  # User who posted ⭐ NEW
+    posted_ip: Optional[str] = None  # IP of user who posted ⭐ NEW
     
     # Approval workflow
     status: ExpenseStatus = Field(default=ExpenseStatus.DRAFT, index=True)
     submitted_by: Optional[str] = None  # User who submitted
     submitted_at: Optional[datetime] = None
-    approved_by: Optional[str] = None  # Admin who approved
     rejected_reason: Optional[str] = None
     rejected_by: Optional[str] = None
+    
+    # Period tracking
+    fiscal_period_id: Optional[str] = None  # Link to fiscal period ⭐ NEW
     
     # Payment tracking
     payment_status: PaymentStatus = Field(default=PaymentStatus.OUTSTANDING, index=True)
@@ -85,7 +90,8 @@ class Expense(SQLModel, table=True):
     paid_by: Optional[str] = None
     
     # Journal entry link (if posted to GL)
-    journal_entry_id: Optional[str] = None
+    journal_entry_id: Optional[str] = None  # JE ID when posted
+    gl_posting_reference: Optional[str] = None  # Reference like "JE-12345" ⭐ NEW
     
     # Audit
     notes: Optional[str] = None

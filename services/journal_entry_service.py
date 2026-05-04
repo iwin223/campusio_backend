@@ -23,7 +23,9 @@ from models.finance import (
     ReferenceType,
 )
 from models.finance.chart_of_accounts import GLAccount
+from models.finance.gl_audit_log import AuditEntityType, AuditActionType
 from services.coa_service import CoaService
+from services.date_separation_service import DateSeparationService
 
 logger = logging.getLogger(__name__)
 
@@ -309,18 +311,26 @@ class JournalEntryService:
         entry_id: str,
         posted_by: str,
         approval_notes: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_role: str = "finance",
     ) -> Optional[JournalEntry]:
         """Post a DRAFT entry to GL (changes accounts to POSTED status)
         
-        Posts all line items to their respective GL accounts by:
+        **CRITICAL OPERATION** - This updates GL account balances and enforces
+        fiscal period controls. Posts all line items to their respective GL accounts by:
         - Increasing debit accounts for debit amounts
         - Increasing credit accounts for credit amounts
+        - Checking fiscal period allows posting
+        - Updating GL account current_balance denormalized field
+        - Recording audit trail
         
         Args:
             school_id: School identifier
             entry_id: Entry ID to post
             posted_by: User posting the entry
             approval_notes: Optional approval notes
+            ip_address: IP address of user (for audit trail)
+            user_role: Role of user posting (for audit trail)
             
         Returns:
             Posted JournalEntry, or None if not found or cannot be posted
@@ -328,6 +338,9 @@ class JournalEntryService:
         Raises:
             JournalEntryError: If entry cannot be posted
         """
+        from services.fiscal_period_service import FiscalPeriodService
+        from services.gl_audit_log_service import GLAuditLogService
+        
         # Get entry
         result = await self.session.execute(
             select(JournalEntry).where(
@@ -359,10 +372,47 @@ class JournalEntryService:
         if not line_items:
             raise JournalEntryError(f"Entry {entry_id} has no line items")
         
+        # ⭐ CRITICAL: Check fiscal period allows posting
+        is_adjusting = getattr(entry, 'is_adjusting_entry', False)
+        fiscal_period_id = getattr(entry, 'fiscal_period_id', None)
+        
+        # ⭐ CRITICAL: Check date separation rules (entry_date vs posted_date)
+        posted_date = entry.posted_date or datetime.utcnow()
+        date_sep_service = DateSeparationService(self.session)
+        posting_eligibility = await date_sep_service.can_post_entry_to_period(
+            school_id=school_id,
+            posted_date=posted_date,
+            is_adjusting_entry=is_adjusting,
+        )
+        
+        if not posting_eligibility.get("can_post"):
+            raise JournalEntryError(
+                f"Cannot post entry with posted_date {posted_date.date()}: "
+                f"{posting_eligibility.get('reason', 'Unknown reason')}"
+            )
+        
+        # Determine fiscal period from posted_date if not already set
+        if not fiscal_period_id and posting_eligibility.get("period_id"):
+            entry.fiscal_period_id = posting_eligibility["period_id"]
+            fiscal_period_id = posting_eligibility["period_id"]
+        
+        # ⭐ CRITICAL: Update GL account balances
+        try:
+            for line_item in line_items:
+                await self.coa_service.update_account_balance(
+                    school_id=school_id,
+                    account_id=line_item.gl_account_id,
+                    debit_amount=line_item.debit_amount,
+                    credit_amount=line_item.credit_amount,
+                )
+        except Exception as e:
+            raise JournalEntryError(f"Failed to update GL account balances: {str(e)}")
+        
         # Update entry status
         entry.posting_status = PostingStatus.POSTED
         entry.posted_date = datetime.utcnow()
         entry.posted_by = posted_by
+        entry.posted_ip = ip_address
         entry.notes = approval_notes or entry.notes
         entry.updated_at = datetime.utcnow()
         
@@ -370,9 +420,33 @@ class JournalEntryService:
         await self.session.commit()
         await self.session.refresh(entry)
         
+        # ⭐ CRITICAL: Log audit trail
+        try:
+            audit_service = GLAuditLogService(self.session)
+            await audit_service.log_action(
+                school_id=school_id,
+                entity_type=AuditEntityType.JOURNAL_ENTRY,
+                entity_id=entry_id,
+                action=AuditActionType.ENTRY_POSTED,
+                user_id=posted_by,
+                user_name=posted_by,  # In production, fetch from user table
+                user_role=user_role,
+                new_values={
+                    "posting_status": "POSTED",
+                    "posted_date": entry.posted_date.isoformat(),
+                    "total_debit": float(entry.total_debit),
+                    "total_credit": float(entry.total_credit),
+                },
+                ip_address=ip_address,
+                related_entity_id=entry.reference_id,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log audit trail for entry {entry_id}: {str(e)}")
+        
         logger.info(
             f"Posted journal entry {entry_id} ({entry.reference_type.value}) "
-            f"for school {school_id} with {len(line_items)} line items"
+            f"for school {school_id} with {len(line_items)} line items "
+            f"(Total: DR {entry.total_debit} CR {entry.total_credit})"
         )
         
         return entry
@@ -457,7 +531,7 @@ class JournalEntryService:
                 created_by=reversed_by,
             )
             
-            # Post the reversal immediately
+            # ⭐ CRITICAL: Post the reversal immediately (updates balances & logs)
             await self.post_entry(
                 school_id=school_id,
                 entry_id=reversal_entry.id,
@@ -475,8 +549,34 @@ class JournalEntryService:
             self.session.add(original_entry)
             await self.session.commit()
             
+            # ⭐ CRITICAL: Log audit trail for reversal
+            try:
+                from services.gl_audit_log_service import GLAuditLogService
+                audit_service = GLAuditLogService(self.session)
+                await audit_service.log_action(
+                    school_id=school_id,
+                    entity_type=AuditEntityType.JOURNAL_ENTRY,
+                    entity_id=entry_id,
+                    action=AuditActionType.ENTRY_REVERSED,
+                    user_id=reversed_by,
+                    user_name=reversed_by,
+                    user_role="finance",
+                    old_values={
+                        "posting_status": "POSTED",
+                        "total_debit": float(original_entry.total_debit),
+                    },
+                    new_values={
+                        "posting_status": "REVERSED",
+                        "reversal_entry_id": reversal_entry.id,
+                    },
+                    related_entity_id=reversal_entry.id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log audit trail for reversal: {str(e)}")
+            
             logger.info(
-                f"Reversed journal entry {entry_id} with reversal entry {reversal_entry.id}"
+                f"Reversed journal entry {entry_id} with reversal entry {reversal_entry.id} "
+                f"(Reason: {reversal_reason})"
             )
             
             return (original_entry, reversal_entry)

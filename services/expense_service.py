@@ -1,6 +1,7 @@
 """Expense Service - Management of school expenses with approval workflow
 
 Handles expense CRUD, approval workflow, GL posting, and payment tracking.
+Integrates with audit logging for compliance and GL balance tracking.
 """
 import logging
 from typing import Optional, List, Dict, Any
@@ -18,6 +19,7 @@ from models.finance import (
     ReferenceType,
 )
 from models.finance.chart_of_accounts import GLAccount
+from models.finance.gl_audit_log import AuditEntityType, AuditActionType
 
 logger = logging.getLogger(__name__)
 
@@ -333,16 +335,21 @@ class ExpenseService:
         expense_id: str,
         approved_by: str,
         approval_notes: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_role: str = "finance",
     ) -> Dict[str, Any]:
         """Approve expense and create GL posting (PENDING → APPROVED)
         
-        Note: GL posting is deferred until separate approval call
+        Note: GL posting is deferred until separate approval call.
+        Logs audit trail for compliance.
         
         Args:
             school_id: School identifier
             expense_id: Expense to approve
             approved_by: User approving
             approval_notes: Optional approval notes
+            ip_address: IP address of approver (for audit trail)
+            user_role: Role of approver (for audit trail)
             
         Returns:
             Updated expense dictionary
@@ -376,7 +383,32 @@ class ExpenseService:
             self.session.add(expense)
             await self.session.commit()
             
-            logger.info(f"Approved expense {expense_id}")
+            # ⭐ Log audit trail
+            try:
+                from services.gl_audit_log_service import GLAuditLogService
+                audit_service = GLAuditLogService(self.session)
+                await audit_service.log_action(
+                    school_id=school_id,
+                    entity_type=AuditEntityType.EXPENSE,
+                    entity_id=expense_id,
+                    action=AuditActionType.EXPENSE_APPROVED,
+                    user_id=approved_by,
+                    user_name=approved_by,  # In production, fetch from user table
+                    user_role=user_role,
+                    old_values={
+                        "status": "PENDING",
+                    },
+                    new_values={
+                        "status": "APPROVED",
+                        "approved_date": datetime.utcnow().isoformat(),
+                        "amount": float(expense.amount),
+                    },
+                    ip_address=ip_address,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log audit trail for expense approval {expense_id}: {str(e)}")
+            
+            logger.info(f"Approved expense {expense_id} (amount: {expense.amount})")
             return await self._expense_to_dict(expense)
         except ExpenseError:
             await self.session.rollback()
@@ -446,15 +478,20 @@ class ExpenseService:
         school_id: str,
         expense_id: str,
         posted_by: str,
+        ip_address: Optional[str] = None,
+        user_role: str = "finance",
     ) -> Dict[str, Any]:
         """Post approved expense to GL (APPROVED → POSTED)
         
-        Creates a journal entry and posts it to GL.
+        **CRITICAL OPERATION** - Creates a journal entry and posts it to GL,
+        updating GL account balances. Logs audit trail for compliance.
         
         Args:
             school_id: School identifier
             expense_id: Expense to post
             posted_by: User posting
+            ip_address: IP address of user (for audit trail)
+            user_role: Role of user posting (for audit trail)
             
         Returns:
             Updated expense dictionary with journal_entry_id
@@ -478,23 +515,57 @@ class ExpenseService:
                     f"Cannot post expense in {expense.status} status (only APPROVED can be posted)"
                 )
             
-            # Create GL journal entry
+            # ⭐ CRITICAL: Create GL journal entry (updates GL balances)
             journal_entry_id = await self._create_expense_journal_entry(
                 school_id=school_id,
                 expense=expense,
                 posted_by=posted_by,
+                ip_address=ip_address,
+                user_role=user_role,
             )
             
             # Update expense
             expense.status = ExpenseStatus.POSTED
             expense.posted_date = datetime.utcnow()
+            expense.posted_by = posted_by
+            expense.posted_ip = ip_address
             expense.journal_entry_id = journal_entry_id
+            expense.gl_posting_reference = f"JE-{journal_entry_id[:8]}"
             expense.updated_at = datetime.utcnow()
             
             self.session.add(expense)
             await self.session.commit()
             
-            logger.info(f"Posted expense {expense_id} to GL (journal entry {journal_entry_id})")
+            # ⭐ Log audit trail
+            try:
+                from services.gl_audit_log_service import GLAuditLogService
+                audit_service = GLAuditLogService(self.session)
+                await audit_service.log_action(
+                    school_id=school_id,
+                    entity_type=AuditEntityType.EXPENSE,
+                    entity_id=expense_id,
+                    action=AuditActionType.EXPENSE_POSTED,
+                    user_id=posted_by,
+                    user_name=posted_by,
+                    user_role=user_role,
+                    old_values={
+                        "status": "APPROVED",
+                    },
+                    new_values={
+                        "status": "POSTED",
+                        "posted_date": datetime.utcnow().isoformat(),
+                        "journal_entry_id": journal_entry_id,
+                    },
+                    ip_address=ip_address,
+                    related_entity_id=journal_entry_id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log audit trail for expense posting {expense_id}: {str(e)}")
+            
+            logger.info(
+                f"Posted expense {expense_id} to GL (journal entry {journal_entry_id}), "
+                f"amount: {expense.amount}, account: {expense.gl_account_code}"
+            )
             return await self._expense_to_dict(expense)
         except ExpenseError:
             await self.session.rollback()
@@ -656,17 +727,23 @@ class ExpenseService:
         school_id: str,
         expense: Expense,
         posted_by: str,
+        ip_address: Optional[str] = None,
+        user_role: str = "finance",
     ) -> str:
         """Create and post GL journal entry for expense
         
-        Posts:
+        **CRITICAL OPERATION** - Posts:
         - Dr. Expense GL account: amount
         - Cr. Bank account (1010): amount
+        
+        Updates GL account balances via journal entry posting.
         
         Args:
             school_id: School identifier
             expense: Expense to post
             posted_by: User posting
+            ip_address: IP address for audit trail
+            user_role: Role for audit trail
             
         Returns:
             Journal entry ID
@@ -736,7 +813,7 @@ class ExpenseService:
             notes=f"Expense from {expense.vendor_name or 'vendor'}" if expense.vendor_name else "Expense posting",
         )
         
-        # Create and post entry
+        # Create and post entry (⭐ this updates GL balances)
         journal_service = JournalEntryService(self.session)
         entry = await journal_service.create_entry(
             school_id=school_id,
@@ -747,8 +824,10 @@ class ExpenseService:
         posted_entry = await journal_service.post_entry(
             school_id=school_id,
             entry_id=entry.id,
-            posted_by="SYSTEM",
-            approval_notes="Auto-posted from expense",
+            posted_by=posted_by,
+            approval_notes=f"Expense {expense.id} from {expense.vendor_name or 'vendor'}: auto-posted",
+            ip_address=ip_address,
+            user_role=user_role,
         )
         
         return posted_entry.id

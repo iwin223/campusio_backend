@@ -424,3 +424,314 @@ class CoaService:
         except Exception as e:
             logger.error(f"Error generating account summary for school {school_id}: {str(e)}")
             return {"error": str(e)}
+    
+    # ==================== ⭐ BALANCE TRACKING OPERATIONS (CRITICAL) ====================
+    
+    async def update_account_balance(
+        self,
+        school_id: str,
+        account_id: str,
+        debit_amount: float = 0.0,
+        credit_amount: float = 0.0,
+    ) -> Optional[GLAccount]:
+        """Update GL account balance after posting a transaction
+        
+        This is CRITICAL for performance and accuracy. Balances are denormalized
+        and cached in the GL account record. This method is called during:
+        - Journal entry posting
+        - Expense posting
+        - Period close procedures
+        
+        Balance calculation:
+        - For DEBIT normal accounts (assets, expenses): DR+ / CR-
+        - For CREDIT normal accounts (liabilities, revenue, equity): CR+ / DR-
+        
+        Args:
+            school_id: School identifier
+            account_id: Account ID to update
+            debit_amount: Debit amount to add to balance
+            credit_amount: Credit amount to add to balance
+            
+        Returns:
+            Updated GLAccount, or None if not found
+        """
+        try:
+            account = await self.get_account_by_id(school_id, account_id)
+            if not account:
+                logger.warning(f"Cannot update balance for non-existent account {account_id}")
+                return None
+            
+            # Calculate balance change based on normal balance
+            if account.normal_balance == "debit":
+                # Debit normal: DR increases, CR decreases
+                balance_change = debit_amount - credit_amount
+            else:
+                # Credit normal: CR increases, DR decreases
+                balance_change = credit_amount - debit_amount
+            
+            # Update balance
+            account.current_balance += balance_change
+            account.last_balance_update = datetime.utcnow()
+            account.updated_at = datetime.utcnow()
+            
+            self.session.add(account)
+            await self.session.commit()
+            await self.session.refresh(account)
+            
+            logger.debug(
+                f"Updated balance for account {account.account_code}: "
+                f"DR {debit_amount} CR {credit_amount} → Balance {account.current_balance}"
+            )
+            
+            return account
+        except Exception as e:
+            logger.error(f"Error updating account balance for {account_id}: {str(e)}")
+            return None
+    
+    async def recalculate_account_balance(
+        self,
+        school_id: str,
+        account_id: str,
+        from_journal_entries: bool = True,
+    ) -> Optional[GLAccount]:
+        """Recalculate GL account balance from journal entries
+        
+        This method recalculates the balance by summing all posted journal entries
+        for the account. Useful for:
+        - Verification after balance update issues
+        - Periodic reconciliation
+        - Period-end procedures
+        
+        Args:
+            school_id: School identifier
+            account_id: Account ID to recalculate
+            from_journal_entries: If True, recalc from JEs; if False use cached
+            
+        Returns:
+            Updated GLAccount with recalculated balance
+        """
+        from sqlmodel import func
+        from models.finance.journal_entries import JournalLineItem, JournalEntry, PostingStatus
+        
+        try:
+            account = await self.get_account_by_id(school_id, account_id)
+            if not account:
+                return None
+            
+            if not from_journal_entries:
+                return account  # Use existing cached balance
+            
+            # Sum all debits and credits for this account from POSTED entries
+            result = await self.session.execute(
+                select(
+                    func.sum(JournalLineItem.debit_amount).label("total_debits"),
+                    func.sum(JournalLineItem.credit_amount).label("total_credits"),
+                ).join(
+                    JournalEntry,
+                    JournalLineItem.journal_entry_id == JournalEntry.id
+                ).where(
+                    and_(
+                        JournalLineItem.school_id == school_id,
+                        JournalLineItem.gl_account_id == account_id,
+                        JournalEntry.posting_status == PostingStatus.POSTED,
+                    )
+                )
+            )
+            
+            row = result.first()
+            total_debits = float(row[0] or 0.0)
+            total_credits = float(row[1] or 0.0)
+            
+            # Calculate balance based on normal balance
+            if account.normal_balance == "debit":
+                account.current_balance = total_debits - total_credits
+            else:
+                account.current_balance = total_credits - total_debits
+            
+            account.last_balance_update = datetime.utcnow()
+            account.updated_at = datetime.utcnow()
+            
+            self.session.add(account)
+            await self.session.commit()
+            await self.session.refresh(account)
+            
+            logger.info(
+                f"Recalculated balance for {account.account_code}: "
+                f"DR {total_debits} CR {total_credits} → Balance {account.current_balance}"
+            )
+            
+            return account
+        except Exception as e:
+            logger.error(f"Error recalculating balance for account {account_id}: {str(e)}")
+            return None
+    
+    async def recalculate_all_balances(self, school_id: str) -> Dict[str, Any]:
+        """Batch recalculate all GL account balances
+        
+        This is a heavy operation used during:
+        - Data correction/audit procedures
+        - Period close verification
+        - Balance reconciliation
+        
+        Should be run during low-traffic times. Returns summary of changes.
+        
+        Args:
+            school_id: School identifier
+            
+        Returns:
+            Summary dictionary with counts and results
+        """
+        try:
+            all_accounts = await self.get_all_accounts(school_id, active_only=False)
+            
+            summary = {
+                "total_accounts": len(all_accounts),
+                "recalculated": 0,
+                "errors": 0,
+                "total_balance": 0.0,
+                "by_type": {},
+            }
+            
+            for account in all_accounts:
+                result = await self.recalculate_account_balance(
+                    school_id, account.id, from_journal_entries=True
+                )
+                
+                if result:
+                    summary["recalculated"] += 1
+                    summary["total_balance"] += result.current_balance
+                    
+                    account_type = result.account_type.value
+                    if account_type not in summary["by_type"]:
+                        summary["by_type"][account_type] = {
+                            "count": 0,
+                            "total_balance": 0.0
+                        }
+                    summary["by_type"][account_type]["count"] += 1
+                    summary["by_type"][account_type]["total_balance"] += result.current_balance
+                else:
+                    summary["errors"] += 1
+            
+            logger.info(
+                f"Recalculated {summary['recalculated']} GL account balances for school {school_id} "
+                f"(Total balance: {summary['total_balance']}, Errors: {summary['errors']})"
+            )
+            
+            return summary
+        except Exception as e:
+            logger.error(f"Error recalculating all balances for school {school_id}: {str(e)}")
+            return {"error": str(e)}
+    
+    async def get_account_balance(
+        self,
+        school_id: str,
+        account_id: str,
+        use_cached: bool = True,
+    ) -> Optional[float]:
+        """Get current balance of a GL account
+        
+        Uses cached balance by default (performance). Pass use_cached=False
+        to recalculate from journal entries for verification.
+        
+        Args:
+            school_id: School identifier
+            account_id: Account ID
+            use_cached: If True use denormalized balance, else recalculate
+            
+        Returns:
+            Current balance, or None if account not found
+        """
+        account = await self.get_account_by_id(school_id, account_id)
+        if not account:
+            return None
+        
+        if use_cached:
+            return account.current_balance
+        
+        # Recalculate
+        result = await self.recalculate_account_balance(
+            school_id, account_id, from_journal_entries=True
+        )
+        return result.current_balance if result else None
+    
+    async def set_opening_balance(
+        self,
+        school_id: str,
+        account_id: str,
+        opening_balance: float,
+    ) -> Optional[GLAccount]:
+        """Set opening balance for GL account (for period tracking)
+        
+        Opening balance is set at the start of each period and used for:
+        - Period comparisons (opening → closing)
+        - Year-to-date calculations
+        - Period-over-period analysis
+        
+        Args:
+            school_id: School identifier
+            account_id: Account ID
+            opening_balance: Balance at period start
+            
+        Returns:
+            Updated GLAccount, or None if not found
+        """
+        account = await self.get_account_by_id(school_id, account_id)
+        if not account:
+            return None
+        
+        account.opening_balance = opening_balance
+        account.updated_at = datetime.utcnow()
+        
+        self.session.add(account)
+        await self.session.commit()
+        await self.session.refresh(account)
+        
+        logger.info(
+            f"Set opening balance for account {account.account_code}: {opening_balance}"
+        )
+        
+        return account
+    
+    async def record_bank_reconciliation(
+        self,
+        school_id: str,
+        account_id: str,
+        reconciled_balance: float,
+        reconciliation_date: datetime,
+        notes: Optional[str] = None,
+    ) -> Optional[GLAccount]:
+        """Record bank reconciliation for a GL account
+        
+        Stores the reconciled balance and date for audit trail.
+        Used during bank reconciliation procedures.
+        
+        Args:
+            school_id: School identifier
+            account_id: Account ID (usually a bank account GL)
+            reconciled_balance: Balance per bank statement
+            reconciliation_date: When reconciliation was done
+            notes: Optional notes about the reconciliation
+            
+        Returns:
+            Updated GLAccount, or None if not found
+        """
+        account = await self.get_account_by_id(school_id, account_id)
+        if not account:
+            return None
+        
+        account.bank_reconciled_balance = reconciled_balance
+        account.bank_reconciliation_date = reconciliation_date
+        account.reconciliation_notes = notes
+        account.updated_at = datetime.utcnow()
+        
+        self.session.add(account)
+        await self.session.commit()
+        await self.session.refresh(account)
+        
+        logger.info(
+            f"Recorded bank reconciliation for {account.account_code}: "
+            f"Balance {reconciled_balance} as of {reconciliation_date.date()}"
+        )
+        
+        return account
+

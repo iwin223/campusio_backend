@@ -63,8 +63,14 @@ class JournalEntry(SQLModel, table=True):
     
     # Status tracking
     posting_status: PostingStatus = Field(default=PostingStatus.DRAFT, index=True)
-    posted_date: Optional[datetime] = None
+    posted_date: Optional[datetime] = None  # When posted to GL (NULL until posted)
     posted_by: Optional[str] = None  # User who posted the entry
+    posted_ip: Optional[str] = None  # IP address of user who posted ⭐ NEW
+    
+    # Period and cutoff (for period management and cutoff procedures)
+    fiscal_period_id: Optional[str] = None  # Link to fiscal period ⭐ NEW
+    cutoff_period: Optional[int] = None  # Which period does this belong to ⭐ NEW
+    is_adjusting_entry: bool = Field(default=False)  # Is this a period-end adjustment? ⭐ NEW
     
     # Rejection tracking (if applicable)
     rejection_reason: Optional[str] = None
@@ -75,6 +81,7 @@ class JournalEntry(SQLModel, table=True):
     reversal_entry_id: Optional[str] = None  # Link to contra-entry if reversed
     reversed_date: Optional[datetime] = None
     reversed_by: Optional[str] = None
+    reversal_reason: Optional[str] = None  # Why was it reversed? ⭐ NEW
     
     # Audit
     created_by: str  # User creating the entry

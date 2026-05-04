@@ -82,6 +82,14 @@ class GLAccount(SQLModel, table=True):
     # Status
     is_active: bool = Field(default=True, index=True)
     
+    # ⭐ BALANCE TRACKING (CRITICAL FOR PERFORMANCE & ACCURACY)
+    current_balance: float = Field(default=0.0)  # Denormalized balance for performance
+    opening_balance: float = Field(default=0.0)  # Period opening balance (for comparisons)
+    bank_reconciled_balance: Optional[float] = None  # Last reconciled balance
+    last_balance_update: datetime = Field(default_factory=datetime.utcnow)  # When balance was last updated
+    bank_reconciliation_date: Optional[datetime] = None  # When last reconciled to bank
+    reconciliation_notes: Optional[str] = None  # Notes on bank reconciliation
+    
     # Tracking
     created_by: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -125,5 +133,11 @@ class GLAccountResponse(SQLModel):
     normal_balance: str
     parent_account_id: Optional[str]
     is_active: bool
+    # ⭐ BALANCE FIELDS (NEW)
+    current_balance: float
+    opening_balance: float
+    bank_reconciled_balance: Optional[float]
+    last_balance_update: datetime
+    created_by: Optional[str]
     created_at: datetime
     updated_at: datetime
