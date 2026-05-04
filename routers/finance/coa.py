@@ -28,7 +28,7 @@ from auth import get_current_user, require_roles
 from services.coa_service import CoaService, CoaServiceError
 from services.coa_initialization import validate_school_chart_of_accounts
 
-router = APIRouter(prefix="/finance/coa", tags=["Finance - Chart of Accounts"])
+router = APIRouter(prefix="/chart-of-accounts", tags=["Finance - Chart of Accounts"])
 
 
 # ==================== Account Creation ====================

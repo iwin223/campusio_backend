@@ -42,7 +42,7 @@ from database import get_session
 from auth import get_current_user, require_roles
 from services.expense_service import ExpenseService, ExpenseError, ExpenseValidationError
 
-router = APIRouter(prefix="/finance/expenses", tags=["Finance - Expenses"])
+router = APIRouter(prefix="/expenses", tags=["Finance - Expenses"])
 
 
 # ==================== Expense Creation ====================

@@ -44,7 +44,7 @@ from database import get_session
 from auth import get_current_user, require_roles
 from services.journal_entry_service import JournalEntryService, JournalEntryError, JournalEntryValidationError
 
-router = APIRouter(prefix="/finance/journal", tags=["Finance - Journal Entries"])
+router = APIRouter(prefix="/journal-entries", tags=["Finance - Journal Entries"])
 
 
 # ==================== Entry Creation ====================

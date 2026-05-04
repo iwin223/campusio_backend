@@ -34,7 +34,7 @@ from database import get_session
 from auth import get_current_user
 from services.reports_service import ReportsService, ReportsServiceError
 
-router = APIRouter(prefix="/finance/reports", tags=["Finance - Reports"])
+router = APIRouter(prefix="/finance-reports", tags=["Finance - Reports"])
 
 
 # ==================== Metadata Endpoint ====================
