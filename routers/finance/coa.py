@@ -182,13 +182,30 @@ async def list_accounts(
     # Parse optional filter parameters
     acc_type = None
     if account_type:
-        try:
-            acc_type = AccountType(account_type)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid account_type: {account_type}"
-            )
+        # Allow friendly aliases like BANK -> bank_accounts
+        type_mapping = {
+            "BANK": "bank_accounts",
+            "BANK_ACCOUNTS": "bank_accounts",
+            "AR": "accounts_receivable",
+            "ACCOUNTS_RECEIVABLE": "accounts_receivable",
+            "AP": "accounts_payable",
+            "ACCOUNTS_PAYABLE": "accounts_payable",
+        }
+        
+        mapped_value = type_mapping.get(account_type.upper())
+        if mapped_value:
+            # User passed a category alias, use it as category instead
+            if not account_category:
+                account_category = mapped_value
+        else:
+            # Try as account type
+            try:
+                acc_type = AccountType(account_type.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid account_type: {account_type}. Use: asset, liability, equity, revenue, expense. Or category aliases: BANK, AR, AP, etc."
+                )
     
     acc_category = None
     if account_category:

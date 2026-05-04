@@ -342,18 +342,19 @@ async def get_batch_logs(
 
 @router.get("/report/summary", response_model=dict)
 async def get_audit_summary(
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Get summary of audit activity within a date range
     
+    If dates not provided, defaults to last 30 days.
     Useful for audit reports and compliance documentation.
     
     Args:
-        start_date: Start date in ISO format
-        end_date: End date in ISO format
+        start_date: Start date in ISO format (optional, defaults to 30 days ago)
+        end_date: End date in ISO format (optional, defaults to today)
         school_id: School identifier
         session: Database session
         
@@ -363,11 +364,22 @@ async def get_audit_summary(
     Raises:
         HTTPException 400: If dates are invalid
     """
-    try:
-        start_dt = datetime.fromisoformat(start_date)
-        end_dt = datetime.fromisoformat(end_date)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format")
+    # Default to last 30 days if dates not provided
+    if not end_date:
+        end_dt = datetime.utcnow()
+    else:
+        try:
+            end_dt = datetime.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format")
+    
+    if not start_date:
+        start_dt = end_dt - timedelta(days=30)
+    else:
+        try:
+            start_dt = datetime.fromisoformat(start_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format")
     
     service = GLAuditLogService(session)
     return await service.get_audit_summary(school_id, start_dt, end_dt)
