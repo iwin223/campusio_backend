@@ -131,6 +131,7 @@ async def get_dashboard_metrics(
         # Calculate metrics per account type
         cash_balance = 0
         accounts_receivable = 0
+        accounts_payable = 0
         total_assets = 0
         total_liabilities = 0
         revenue = 0

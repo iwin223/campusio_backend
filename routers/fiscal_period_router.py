@@ -63,12 +63,12 @@ async def create_fiscal_period(
         period = await service.create_period(
             school_id=school_id,
             period_data=period_data,
-            created_by=current_user.get("id", "unknown"),
+            created_by=current_user.id,
         )
         
         logger.info(
             f"Created fiscal period {period.period_name} for school {school_id} "
-            f"by user {current_user.get('id')}"
+            f"by user {current_user.id}"
         )
         
         return {
@@ -91,48 +91,6 @@ async def create_fiscal_period(
 
 
 # ==================== Read ====================
-
-@router.get("/{period_id}", response_model=dict)
-async def get_fiscal_period(
-    period_id: str,
-    school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    """Get a fiscal period by ID
-    
-    Args:
-        period_id: Period ID
-        school_id: School identifier
-        session: Database session
-        
-    Returns:
-        Fiscal period data
-        
-    Raises:
-        HTTPException 404: If period not found
-    """
-    service = FiscalPeriodService(session)
-    period = await service.get_period_by_id(school_id, period_id)
-    
-    if not period:
-        raise HTTPException(status_code=404, detail="Fiscal period not found")
-    
-    return {
-        "id": period.id,
-        "period_name": period.period_name,
-        "period_type": period.period_type.value,
-        "start_date": period.start_date,
-        "end_date": period.end_date,
-        "fiscal_year": period.fiscal_year,
-        "status": period.status.value,
-        "allow_posting": period.allow_posting,
-        "allow_adjustment_entries": period.allow_adjustment_entries,
-        "is_current_period": period.is_current_period,
-        "locked_date": period.locked_date,
-        "closed_date": period.closed_date,
-        "notes": period.notes,
-    }
-
 
 @router.get("/", response_model=list)
 async def list_fiscal_periods(
@@ -262,6 +220,66 @@ async def get_period_by_date(
     }
 
 
+@router.get("/summary", response_model=dict)
+async def get_period_summary(
+    school_id: str = Depends(get_current_school_id),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Get summary of all fiscal periods
+    
+    Args:
+        school_id: School identifier
+        session: Database session
+        
+    Returns:
+        Period summary with counts by status and fiscal year
+    """
+    service = FiscalPeriodService(session)
+    return await service.get_period_summary(school_id)
+
+
+@router.get("/{period_id}", response_model=dict)
+async def get_fiscal_period(
+    period_id: str,
+    school_id: str = Depends(get_current_school_id),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Get a fiscal period by ID
+    
+    Args:
+        period_id: Period ID
+        school_id: School identifier
+        session: Database session
+        
+    Returns:
+        Fiscal period data
+        
+    Raises:
+        HTTPException 404: If period not found
+    """
+    service = FiscalPeriodService(session)
+    period = await service.get_period_by_id(school_id, period_id)
+    
+    if not period:
+        raise HTTPException(status_code=404, detail="Fiscal period not found")
+    
+    return {
+        "id": period.id,
+        "period_name": period.period_name,
+        "period_type": period.period_type.value,
+        "start_date": period.start_date,
+        "end_date": period.end_date,
+        "fiscal_year": period.fiscal_year,
+        "status": period.status.value,
+        "allow_posting": period.allow_posting,
+        "allow_adjustment_entries": period.allow_adjustment_entries,
+        "is_current_period": period.is_current_period,
+        "locked_date": period.locked_date,
+        "closed_date": period.closed_date,
+        "notes": period.notes,
+    }
+
+
 # ==================== Status Transitions ====================
 
 @router.post("/{period_id}/lock", response_model=dict)
@@ -294,14 +312,14 @@ async def lock_fiscal_period(
         period = await service.lock_period(
             school_id=school_id,
             period_id=period_id,
-            locked_by=current_user.get("id", "unknown"),
+            locked_by=current_user.id,
             notes=notes,
         )
         
         if not period:
             raise HTTPException(status_code=404, detail="Fiscal period not found")
         
-        logger.info(f"Locked fiscal period {period_id} by user {current_user.get('id')}")
+        logger.info(f"Locked fiscal period {period_id} by user {current_user.id}")
         
         return {
             "id": period.id,
@@ -348,14 +366,14 @@ async def close_fiscal_period(
         period = await service.close_period(
             school_id=school_id,
             period_id=period_id,
-            closed_by=current_user.get("id", "unknown"),
+            closed_by=current_user.id,
             notes=notes,
         )
         
         if not period:
             raise HTTPException(status_code=404, detail="Fiscal period not found")
         
-        logger.info(f"Closed fiscal period {period_id} by user {current_user.get('id')}")
+        logger.info(f"Closed fiscal period {period_id} by user {current_user.id}")
         
         return {
             "id": period.id,
@@ -399,7 +417,7 @@ async def set_current_period(
     if not period:
         raise HTTPException(status_code=404, detail="Fiscal period not found")
     
-    logger.info(f"Set {period.period_name} as current period by user {current_user.get('id')}")
+    logger.info(f"Set {period.period_name} as current period by user {current_user.id}")
     
     return {
         "id": period.id,
@@ -409,24 +427,6 @@ async def set_current_period(
 
 
 # ==================== Analysis ====================
-
-@router.get("/summary", response_model=dict)
-async def get_period_summary(
-    school_id: str = Depends(get_current_school_id),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    """Get summary of all fiscal periods
-    
-    Args:
-        school_id: School identifier
-        session: Database session
-        
-    Returns:
-        Period summary with counts by status and fiscal year
-    """
-    service = FiscalPeriodService(session)
-    return await service.get_period_summary(school_id)
-
 
 @router.post("/{period_id}/check-posting", response_model=dict)
 async def check_if_can_post_to_period(

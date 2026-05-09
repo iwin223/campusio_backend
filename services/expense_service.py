@@ -1,7 +1,6 @@
 """Expense Service - Management of school expenses with approval workflow
 
-Handles expense CRUD, approval workflow, GL posting, and payment tracking.
-Integrates with audit logging for compliance and GL balance tracking.
+Handles expense CRUD, approval workflow, and GL posting with GL account balance updates.
 """
 import logging
 from typing import Optional, List, Dict, Any
@@ -19,7 +18,6 @@ from models.finance import (
     ReferenceType,
 )
 from models.finance.chart_of_accounts import GLAccount
-from models.finance.gl_audit_log import AuditEntityType, AuditActionType
 
 logger = logging.getLogger(__name__)
 
@@ -383,31 +381,6 @@ class ExpenseService:
             self.session.add(expense)
             await self.session.commit()
             
-            # ⭐ Log audit trail
-            try:
-                from services.gl_audit_log_service import GLAuditLogService
-                audit_service = GLAuditLogService(self.session)
-                await audit_service.log_action(
-                    school_id=school_id,
-                    entity_type=AuditEntityType.EXPENSE,
-                    entity_id=expense_id,
-                    action=AuditActionType.EXPENSE_APPROVED,
-                    user_id=approved_by,
-                    user_name=approved_by,  # In production, fetch from user table
-                    user_role=user_role,
-                    old_values={
-                        "status": "PENDING",
-                    },
-                    new_values={
-                        "status": "APPROVED",
-                        "approved_date": datetime.utcnow().isoformat(),
-                        "amount": float(expense.amount),
-                    },
-                    ip_address=ip_address,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to log audit trail for expense approval {expense_id}: {str(e)}")
-            
             logger.info(f"Approved expense {expense_id} (amount: {expense.amount})")
             return await self._expense_to_dict(expense)
         except ExpenseError:
@@ -535,32 +508,6 @@ class ExpenseService:
             
             self.session.add(expense)
             await self.session.commit()
-            
-            # ⭐ Log audit trail
-            try:
-                from services.gl_audit_log_service import GLAuditLogService
-                audit_service = GLAuditLogService(self.session)
-                await audit_service.log_action(
-                    school_id=school_id,
-                    entity_type=AuditEntityType.EXPENSE,
-                    entity_id=expense_id,
-                    action=AuditActionType.EXPENSE_POSTED,
-                    user_id=posted_by,
-                    user_name=posted_by,
-                    user_role=user_role,
-                    old_values={
-                        "status": "APPROVED",
-                    },
-                    new_values={
-                        "status": "POSTED",
-                        "posted_date": datetime.utcnow().isoformat(),
-                        "journal_entry_id": journal_entry_id,
-                    },
-                    ip_address=ip_address,
-                    related_entity_id=journal_entry_id,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to log audit trail for expense posting {expense_id}: {str(e)}")
             
             logger.info(
                 f"Posted expense {expense_id} to GL (journal entry {journal_entry_id}), "

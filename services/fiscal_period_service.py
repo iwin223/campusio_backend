@@ -251,8 +251,11 @@ class FiscalPeriodService:
             if status:
                 query = query.where(FiscalPeriod.status == status)
             
+            # Order by start_date DESC to get the most recent period if overlaps exist
+            query = query.order_by(FiscalPeriod.start_date.desc())
+            
             result = await self.session.execute(query)
-            return result.scalar_one_or_none()
+            return result.scalars().first()
         except Exception as e:
             logger.error(f"Error fetching period for date {date}: {str(e)}")
             return None

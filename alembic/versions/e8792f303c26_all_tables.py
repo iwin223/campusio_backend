@@ -1,8 +1,8 @@
 """all_tables
 
-Revision ID: b770252e5934
+Revision ID: e8792f303c26
 Revises: 
-Create Date: 2026-04-30 08:22:53.762899
+Create Date: 2026-05-09 06:30:41.821614
 
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ import sqlmodel
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'b770252e5934'
+revision: str = 'e8792f303c26'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -274,18 +274,22 @@ def upgrade() -> None:
     sa.Column('gl_account_code', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('expense_date', sa.DateTime(), nullable=False),
     sa.Column('approved_date', sa.DateTime(), nullable=True),
+    sa.Column('approved_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('posted_date', sa.DateTime(), nullable=True),
+    sa.Column('posted_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('posted_ip', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('status', sa.Enum('DRAFT', 'PENDING', 'APPROVED', 'REJECTED', 'POSTED', name='expensestatus'), nullable=False),
     sa.Column('submitted_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('submitted_at', sa.DateTime(), nullable=True),
-    sa.Column('approved_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('rejected_reason', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('rejected_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('fiscal_period_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('payment_status', sa.Enum('OUTSTANDING', 'PARTIAL', 'PAID', name='paymentstatus'), nullable=False),
     sa.Column('amount_paid', sa.Float(), nullable=False),
     sa.Column('payment_date', sa.DateTime(), nullable=True),
     sa.Column('paid_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('journal_entry_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('gl_posting_reference', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('notes', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('created_by', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
@@ -368,6 +372,12 @@ def upgrade() -> None:
     sa.Column('normal_balance', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('parent_account_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('current_balance', sa.Float(), nullable=False),
+    sa.Column('opening_balance', sa.Float(), nullable=False),
+    sa.Column('bank_reconciled_balance', sa.Float(), nullable=True),
+    sa.Column('last_balance_update', sa.DateTime(), nullable=False),
+    sa.Column('bank_reconciliation_date', sa.DateTime(), nullable=True),
+    sa.Column('reconciliation_notes', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('created_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
@@ -589,12 +599,17 @@ def upgrade() -> None:
     sa.Column('posting_status', sa.Enum('DRAFT', 'POSTED', 'REVERSED', 'REJECTED', name='postingstatus'), nullable=False),
     sa.Column('posted_date', sa.DateTime(), nullable=True),
     sa.Column('posted_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('posted_ip', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('fiscal_period_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('cutoff_period', sa.Integer(), nullable=True),
+    sa.Column('is_adjusting_entry', sa.Boolean(), nullable=False),
     sa.Column('rejection_reason', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('rejected_date', sa.DateTime(), nullable=True),
     sa.Column('rejected_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('reversal_entry_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('reversed_date', sa.DateTime(), nullable=True),
     sa.Column('reversed_by', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('reversal_reason', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('created_by', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('notes', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),

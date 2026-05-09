@@ -7,6 +7,7 @@ Every change to GL accounts, journal entries, and expenses is logged for:
 - User accountability (track user actions)
 """
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Enum as SQLEnum, Column
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -74,9 +75,19 @@ class GLAuditLog(SQLModel, table=True):
     school_id: str = Field(index=True)
     
     # WHAT changed
-    entity_type: AuditEntityType = Field(index=True)
+    entity_type: AuditEntityType = Field(
+        sa_column=Column(
+            SQLEnum(AuditEntityType, name="auditentitytype", values_callable=lambda x: [e.value for e in x]),
+            index=True
+        )
+    )
     entity_id: str = Field(index=True)  # ID of the entity (JE ID, GL account ID, etc)
-    action: AuditActionType = Field(index=True)
+    action: AuditActionType = Field(
+        sa_column=Column(
+            SQLEnum(AuditActionType, name="auditactiontype", values_callable=lambda x: [e.value for e in x]),
+            index=True
+        )
+    )
     
     # WHO made the change
     user_id: str = Field(index=True)  # User performing the action

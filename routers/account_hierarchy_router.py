@@ -31,9 +31,7 @@ router = APIRouter(prefix="/account-hierarchy", tags=["Account Hierarchy"])
 
 @router.post("/hierarchies", response_model=dict)
 async def create_hierarchy(
-    hierarchy_name: str = Query(...),
-    hierarchy_type: AccountHierarchyType = Query(...),
-    description: Optional[str] = Query(None),
+    body: dict,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
@@ -44,9 +42,10 @@ async def create_hierarchy(
     functional, program-based).
     
     Args:
-        hierarchy_name: Name of hierarchy (e.g., "Organizational Structure")
-        hierarchy_type: Type (ACCOUNT_LEVEL, ORGANIZATIONAL, FUNCTIONAL, etc.)
-        description: Optional description
+        body: Request body containing:
+            - hierarchy_name: Name of hierarchy (e.g., "Organizational Structure")
+            - hierarchy_type: Type (ACCOUNT_LEVEL, ORGANIZATIONAL, FUNCTIONAL, etc.)
+            - description: Optional description
         current_user: Current user
         school_id: School identifier
         session: Database session
@@ -54,18 +53,36 @@ async def create_hierarchy(
     Returns:
         Hierarchy ID and confirmation
     """
+    hierarchy_name = body.get("hierarchy_name")
+    hierarchy_type = body.get("hierarchy_type")
+    description = body.get("description")
+    
+    if not hierarchy_name:
+        raise HTTPException(status_code=400, detail="hierarchy_name is required")
+    if not hierarchy_type:
+        raise HTTPException(status_code=400, detail="hierarchy_type is required")
+    
+    try:
+        hierarchy_type = AccountHierarchyType(hierarchy_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid hierarchy_type. Must be one of: {', '.join([t.value for t in AccountHierarchyType])}"
+        )
     try:
         service = AccountHierarchyService(session)
+        # Handle both dict and User object
+        user_id = current_user.get("id", "unknown") if isinstance(current_user, dict) else getattr(current_user, "id", "unknown")
         hierarchy_id = await service.create_hierarchy(
             school_id=school_id,
             hierarchy_name=hierarchy_name,
             hierarchy_type=hierarchy_type,
             description=description,
-            created_by=current_user.get("id", "unknown"),
+            created_by=user_id,
         )
         
         logger.info(
-            f"Hierarchy '{hierarchy_name}' created by {current_user.get('id')} "
+            f"Hierarchy '{hierarchy_name}' created by {user_id} "
             f"({hierarchy_type.value})"
         )
         
@@ -88,13 +105,7 @@ async def create_hierarchy(
 
 @router.post("/nodes", response_model=dict)
 async def create_hierarchy_node(
-    hierarchy_id: str = Query(...),
-    node_name: str = Query(...),
-    node_code: str = Query(...),
-    level: HierarchyLevel = Query(...),
-    parent_node_id: Optional[str] = Query(None),
-    gl_account_id: Optional[str] = Query(None),
-    sequence: int = Query(0),
+    body: dict,
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -106,19 +117,44 @@ async def create_hierarchy_node(
     - Total: Root node for entire hierarchy
     
     Args:
-        hierarchy_id: Parent hierarchy ID
-        node_name: Display name
-        node_code: Hierarchical code (e.g., "1.1.1" for 3 levels)
-        level: Node level (DETAIL, SUMMARY, TOTAL)
-        parent_node_id: Parent node (if not root)
-        gl_account_id: GL account ID (if detail node)
-        sequence: Display order
+        body: Request body containing:
+            - hierarchy_id: Parent hierarchy ID
+            - node_name: Display name
+            - node_code: Hierarchical code (e.g., "1.1.1" for 3 levels)
+            - level: Node level (DETAIL, SUMMARY, TOTAL)
+            - parent_node_id: Parent node (if not root) (optional)
+            - gl_account_id: GL account ID (if detail node) (optional)
+            - sequence: Display order (optional, default 0)
         school_id: School identifier
         session: Database session
         
     Returns:
         Node ID and confirmation
     """
+    hierarchy_id = body.get("hierarchy_id")
+    node_name = body.get("node_name")
+    node_code = body.get("node_code")
+    level = body.get("level")
+    parent_node_id = body.get("parent_node_id")
+    gl_account_id = body.get("gl_account_id")
+    sequence = body.get("sequence", 0)
+    
+    if not hierarchy_id:
+        raise HTTPException(status_code=400, detail="hierarchy_id is required")
+    if not node_name:
+        raise HTTPException(status_code=400, detail="node_name is required")
+    if not node_code:
+        raise HTTPException(status_code=400, detail="node_code is required")
+    if not level:
+        raise HTTPException(status_code=400, detail="level is required")
+    
+    try:
+        level = HierarchyLevel(level)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid level. Must be one of: {', '.join([l.value for l in HierarchyLevel])}"
+        )
     try:
         service = AccountHierarchyService(session)
         node_id = await service.create_hierarchy_node(
@@ -152,11 +188,7 @@ async def create_hierarchy_node(
 
 @router.post("/relationships", response_model=dict)
 async def add_hierarchy_relationship(
-    hierarchy_id: str = Query(...),
-    parent_node_id: str = Query(...),
-    child_node_id: str = Query(...),
-    child_sequence: int = Query(0),
-    contribution_percentage: float = Query(100.0),
+    body: dict,
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -166,17 +198,30 @@ async def add_hierarchy_relationship(
     circular references.
     
     Args:
-        hierarchy_id: Hierarchy ID
-        parent_node_id: Parent node ID
-        child_node_id: Child node ID
-        child_sequence: Order within parent
-        contribution_percentage: % of child that rolls up (default 100%)
+        body: Request body containing:
+            - hierarchy_id: Hierarchy ID
+            - parent_node_id: Parent node ID
+            - child_node_id: Child node ID
+            - child_sequence: Order within parent (optional, default 0)
+            - contribution_percentage: % of child that rolls up (optional, default 100%)
         school_id: School identifier
         session: Database session
         
     Returns:
         Relationship confirmation
     """
+    hierarchy_id = body.get("hierarchy_id")
+    parent_node_id = body.get("parent_node_id")
+    child_node_id = body.get("child_node_id")
+    child_sequence = body.get("child_sequence", 0)
+    contribution_percentage = body.get("contribution_percentage", 100.0)
+    
+    if not hierarchy_id:
+        raise HTTPException(status_code=400, detail="hierarchy_id is required")
+    if not parent_node_id:
+        raise HTTPException(status_code=400, detail="parent_node_id is required")
+    if not child_node_id:
+        raise HTTPException(status_code=400, detail="child_node_id is required")
     try:
         service = AccountHierarchyService(session)
         relationship_id = await service.add_hierarchy_relationship(
