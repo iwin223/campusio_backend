@@ -10,6 +10,7 @@ from models.student import Student, StudentCreate, StudentStatus, Parent, Parent
 from models.classroom import Class
 from models.school import School
 from models.user import User, UserRole
+from models.otp import OTPSettings, OTP
 from database import get_session
 from auth import get_current_user, require_roles, get_password_hash
 from services.csv_import_service import CSVImportService
@@ -21,6 +22,31 @@ def _normalize_name(name: str) -> str:
     cleaned = name.strip().lower()
     cleaned = re.sub(r'[^a-z0-9]+', '', cleaned)
     return cleaned
+
+
+async def _delete_user_with_otp_cleanup(user_id: str, session: AsyncSession):
+    """Delete a user and its related OTP records to avoid foreign key violations"""
+    # Delete OTP settings for this user
+    otp_settings_result = await session.execute(
+        select(OTPSettings).where(OTPSettings.user_id == user_id)
+    )
+    otp_settings = otp_settings_result.scalars().all()
+    for otp_setting in otp_settings:
+        await session.delete(otp_setting)
+    
+    # Delete OTP codes for this user
+    otp_result = await session.execute(
+        select(OTP).where(OTP.user_id == user_id)
+    )
+    otp_codes = otp_result.scalars().all()
+    for otp_code in otp_codes:
+        await session.delete(otp_code)
+    
+    # Delete the user
+    user_result = await session.execute(select(User).where(User.id == user_id))
+    user = user_result.scalar_one_or_none()
+    if user:
+        await session.delete(user)
 
 
 async def _get_school_short_code(school_id: str, session: AsyncSession) -> str:
@@ -617,12 +643,9 @@ async def regenerate_student_portal_credentials(
     if current_user.role == UserRole.SCHOOL_ADMIN and current_user.school_id != student.school_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    # Delete existing user if exists
+    # Delete existing user if exists (with OTP cleanup)
     if student.user_id:
-        existing_user_result = await session.execute(select(User).where(User.id == student.user_id))
-        existing_user = existing_user_result.scalar_one_or_none()
-        if existing_user:
-            await session.delete(existing_user)
+        await _delete_user_with_otp_cleanup(student.user_id, session)
     
     # Create new user
     portal_user, portal_password = await _create_portal_user(
@@ -681,12 +704,9 @@ async def regenerate_parent_portal_credentials(
     if not link:
         raise HTTPException(status_code=404, detail="Parent not linked to this student")
     
-    # Delete existing user if exists
+    # Delete existing user if exists (with OTP cleanup)
     if parent.user_id:
-        existing_user_result = await session.execute(select(User).where(User.id == parent.user_id))
-        existing_user = existing_user_result.scalar_one_or_none()
-        if existing_user:
-            await session.delete(existing_user)
+        await _delete_user_with_otp_cleanup(parent.user_id, session)
     
     # Create new user
     portal_user, portal_password = await _create_portal_user(

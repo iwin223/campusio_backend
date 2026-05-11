@@ -7,13 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_
 from sqlmodel import select
 
-from models.fee import Fee, FeePayment, PaymentStatus, PaymentMethod
-from models.student import Parent
+from models.fee import Fee, FeePayment, FeeStructure, PaymentStatus, PaymentMethod, FeeType
+from models.student import Parent, Student
 from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification, TransactionType
-from models.finance import JournalEntry, JournalLineItem, ReferenceType
+from models.finance import JournalEntry, JournalLineItem, ReferenceType, JournalEntryCreate, JournalLineItemCreate
 from models.finance.chart_of_accounts import GLAccount
 from services.paystack_service import PaystackService
 from services.sms_service import sms_service  # Existing SMS service
+from services.journal_entry_service import JournalEntryService
 
 logger = logging.getLogger(__name__)
 
@@ -470,6 +471,31 @@ class OnlinePaymentService:
             fee.updated_at = datetime.utcnow()
             session.add(fee)
             
+            # Flush to ensure FeePayment has ID before GL posting
+            await session.flush()
+            
+            # Create GL journal entry for this fee payment
+            try:
+                # Get fee structure for GL posting
+                fee_structure_result = await session.execute(
+                    select(FeeStructure).where(FeeStructure.id == fee.fee_structure_id)
+                )
+                fee_structure = fee_structure_result.scalar_one_or_none()
+                
+                if fee_structure:
+                    await self._create_fee_journal_entry_for_online_payment(
+                        session=session,
+                        school_id=school_id,
+                        payment=fee_payment,
+                        fee=fee,
+                        fee_structure=fee_structure,
+                        amount=amount_for_this_fee,
+                    )
+                    logger.info(f"Created GL journal entry for online fee payment {fee_payment.id}")
+            except Exception as e:
+                logger.error(f"Error creating GL journal entry for online fee payment: {str(e)}")
+                # Continue processing payments even if GL posting fails
+            
             # Reduce remaining amount
             remaining_amount -= amount_for_this_fee
             
@@ -479,3 +505,141 @@ class OnlinePaymentService:
             )
         
         return remaining_amount, fee_payments_created
+    
+    async def _create_fee_journal_entry_for_online_payment(
+        self,
+        session: AsyncSession,
+        school_id: str,
+        payment: FeePayment,
+        fee: Fee,
+        fee_structure: FeeStructure,
+        amount: float,
+    ) -> Optional[str]:
+        """
+        Create a journal entry for online fee payment posting to GL.
+        
+        Posts:
+        - Dr. 1010 (Business Checking Account): Payment amount received
+        - Cr. GL account based on fee type:
+          - 4100 for tuition (TUITION)
+          - 4110 for examination (EXAMINATION)
+          - 4120 for sports (SPORTS)
+          - 4130 for ICT (ICT)
+          - 4140 for library (LIBRARY)
+          - 4150 for PTA (PTA)
+          - 4160 for maintenance (MAINTENANCE)
+          - 4100 for other (OTHER)
+        
+        Args:
+            session: AsyncSession
+            school_id: School identifier
+            payment: FeePayment instance
+            fee: Fee instance
+            fee_structure: FeeStructure with fee_type
+            amount: Payment amount
+            
+        Returns:
+            Journal entry ID or None if GL posting fails
+        """
+        try:
+            # Map fee type to GL account code
+            fee_type_to_gl_account = {
+                FeeType.TUITION: "4100",
+                FeeType.EXAMINATION: "4110",
+                FeeType.SPORTS: "4120",
+                FeeType.ICT: "4130",
+                FeeType.LIBRARY: "4140",
+                FeeType.PTA: "4150",
+                FeeType.MAINTENANCE: "4160",
+                FeeType.OTHER: "4100",
+            }
+            
+            revenue_account_code = fee_type_to_gl_account.get(fee_structure.fee_type, "4100")
+            
+            # Get GL accounts: 1010 (Bank) and revenue account
+            result = await session.execute(
+                select(GLAccount).where(
+                    and_(
+                        GLAccount.school_id == school_id,
+                        GLAccount.account_code == "1010",
+                        GLAccount.is_active == True
+                    )
+                )
+            )
+            bank_account = result.scalar_one_or_none()
+            
+            if not bank_account:
+                logger.warning(f"GL Account 1010 (Business Checking Account) not found for school {school_id}")
+                return None
+            
+            result = await session.execute(
+                select(GLAccount).where(
+                    and_(
+                        GLAccount.school_id == school_id,
+                        GLAccount.account_code == revenue_account_code,
+                        GLAccount.is_active == True
+                    )
+                )
+            )
+            revenue_account = result.scalar_one_or_none()
+            
+            if not revenue_account:
+                logger.warning(f"GL Account {revenue_account_code} ({fee_structure.fee_type}) not found for school {school_id}")
+                return None
+            
+            # Get student name for description
+            student_result = await session.execute(
+                select(Student).where(Student.id == payment.student_id)
+            )
+            student = student_result.scalar_one_or_none()
+            student_name = f"{student.first_name} {student.last_name}" if student else "Unknown"
+            
+            # Build line items for journal entry
+            journal_line_items = [
+                # Debit: Bank account (deposit received)
+                JournalLineItemCreate(
+                    gl_account_id=bank_account.id,
+                    debit_amount=float(amount),
+                    credit_amount=0.0,
+                    description=f"Online fee payment received from {student_name} - {fee_structure.fee_type}",
+                ),
+                # Credit: Revenue account (fee income recognized)
+                JournalLineItemCreate(
+                    gl_account_id=revenue_account.id,
+                    debit_amount=0.0,
+                    credit_amount=float(amount),
+                    description=f"Fee income from {student_name} - {fee_structure.fee_type} ({payment.receipt_number})",
+                ),
+            ]
+            
+            # Create the journal entry
+            entry_data = JournalEntryCreate(
+                entry_date=datetime.fromisoformat(payment.payment_date) if isinstance(payment.payment_date, str) else payment.payment_date,
+                reference_type=ReferenceType.FEE_PAYMENT,
+                reference_id=payment.id,
+                description=f"Online fee payment from {student_name} ({payment.receipt_number})",
+                line_items=journal_line_items,
+                notes=f"Auto-posted from online fee payment {payment.id} - Paystack",
+            )
+            
+            # Use JournalEntryService to create and post the entry
+            journal_service = JournalEntryService(session)
+            entry = await journal_service.create_entry(
+                school_id=school_id,
+                entry_data=entry_data,
+                created_by="SYSTEM",  # Mark as system-generated
+            )
+            
+            # Post the entry immediately (auto-posting)
+            posted_entry = await journal_service.post_entry(
+                school_id=school_id,
+                entry_id=entry.id,
+                posted_by="SYSTEM",
+                approval_notes="Auto-posted from online fee payment",
+            )
+            
+            return posted_entry.id
+        
+        except Exception as e:
+            logger.error(f"Error creating GL journal entry for online fee payment: {str(e)}")
+            return None
