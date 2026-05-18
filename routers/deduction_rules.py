@@ -303,10 +303,9 @@ async def apply_preset_rules(
 
 @router.post("/test", response_model=dict)
 async def test_rule_evaluation(
-    rule_id: str,
-    staff_id: str,
-    basic_salary: float,
-    metadata: dict = {},
+    rule_id: str = Query(...),
+    staff_id: str = Query(...),
+    basic_salary: float = Query(...),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
@@ -333,8 +332,7 @@ async def test_rule_evaluation(
         rule,
         {
             "staff_id": staff_id,
-            "basic_salary": basic_salary,
-            **metadata
+            "basic_salary": basic_salary
         }
     )
     
@@ -349,11 +347,10 @@ async def test_rule_evaluation(
 
 @router.post("/test-all", response_model=dict)
 async def test_all_rules(
-    staff_id: str,
-    basic_salary: float,
-    period_year: int,
-    period_month: int,
-    metadata: dict = {},
+    staff_id: str = Query(...),
+    basic_salary: float = Query(...),
+    period_year: int = Query(...),
+    period_month: int = Query(...),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
@@ -368,7 +365,7 @@ async def test_all_rules(
         basic_salary=basic_salary,
         period_year=period_year,
         period_month=period_month,
-        staff_metadata=metadata
+        staff_metadata={}
     )
     
     return {

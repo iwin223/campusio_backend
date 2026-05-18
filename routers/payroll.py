@@ -88,6 +88,10 @@ async def create_payroll_contract(
         "total_allowances": (contract.allowance_housing + contract.allowance_transport + 
                             contract.allowance_meals + contract.allowance_utilities + 
                             contract.allowance_other),
+        "tax_rate_percent": contract.tax_rate_percent,
+        "pension_rate_percent": contract.pension_rate_percent,
+        "nssf_rate_percent": contract.nssf_rate_percent,
+        "other_deduction": contract.other_deduction,
         "status": "active" if contract.is_active else "inactive",
         "created_at": contract.created_at.isoformat()
     }
@@ -136,23 +140,23 @@ async def import_contracts_csv(
                     errors.append(f"Row {index + 2}: staff_id cannot be empty")
                     continue
                 
-                # Verify staff exists
+                # Verify staff exists by staff_id (staff code)
                 staff_result = await session.execute(
                     select(Staff).where(
-                        Staff.id == staff_id,
+                        Staff.staff_id == staff_id,
                         Staff.school_id == school_id
                     )
                 )
                 staff = staff_result.scalar_one_or_none()
                 if not staff:
-                    errors.append(f"Row {index + 2}: Staff ID '{staff_id}' not found")
+                    errors.append(f"Row {index + 2}: Staff code '{staff_id}' not found")
                     continue
                 
-                # Check for existing active contract
+                # Check for existing active contract using the staff's UUID
                 existing_result = await session.execute(
                     select(PayrollContract).where(
                         PayrollContract.school_id == school_id,
-                        PayrollContract.staff_id == staff_id,
+                        PayrollContract.staff_id == staff.id,
                         PayrollContract.is_active == True
                     )
                 )
@@ -160,9 +164,9 @@ async def import_contracts_csv(
                     errors.append(f"Row {index + 2}: Active contract already exists for staff '{staff_id}'")
                     continue
                 
-                # Parse contract data
+                # Parse contract data with the staff's UUID
                 contract_data = PayrollContractCreate(
-                    staff_id=staff_id,
+                    staff_id=staff.id,
                     basic_salary=float(row['basic_salary']),
                     pay_schedule=str(row['pay_schedule']).strip().lower(),
                     allowance_housing=float(row.get('allowance_housing', 0) or 0),
@@ -281,6 +285,10 @@ async def list_payroll_contracts(
                 "total_allowances": (c.allowance_housing + c.allowance_transport + 
                                    c.allowance_meals + c.allowance_utilities + 
                                    c.allowance_other),
+                "tax_rate_percent": c.tax_rate_percent,
+                "pension_rate_percent": c.pension_rate_percent,
+                "nssf_rate_percent": c.nssf_rate_percent,
+                "other_deduction": c.other_deduction,
                 "effective_from": c.effective_from.isoformat(),
                 "effective_to": c.effective_to.isoformat() if c.effective_to else None,
                 "status": "active" if c.is_active else "inactive",
@@ -383,6 +391,14 @@ async def update_payroll_contract(
         "id": contract.id,
         "staff_id": contract.staff_id,
         "basic_salary": contract.basic_salary,
+        "pay_schedule": contract.pay_schedule,
+        "total_allowances": (contract.allowance_housing + contract.allowance_transport + 
+                            contract.allowance_meals + contract.allowance_utilities + 
+                            contract.allowance_other),
+        "tax_rate_percent": contract.tax_rate_percent,
+        "pension_rate_percent": contract.pension_rate_percent,
+        "nssf_rate_percent": contract.nssf_rate_percent,
+        "other_deduction": contract.other_deduction,
         "status": "active" if contract.is_active else "inactive",
         "updated_at": contract.updated_at.isoformat()
     }
@@ -410,7 +426,8 @@ async def generate_payroll_run(
         notes=payroll_data.notes
     )
     
-    if not result["success"]:
+    # Return 400 only if no payroll was generated at all
+    if result.get("success_count", 0) == 0:
         raise HTTPException(
             status_code=400,
             detail=result["message"],

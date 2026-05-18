@@ -237,7 +237,11 @@ class RulesEvaluationService:
         if staff:
             # Calculate years of service
             if staff.date_joined:
-                years_service = (datetime.utcnow() - staff.date_joined).days / 365.25
+                # Handle both datetime and string date_joined
+                joined_date = staff.date_joined
+                if isinstance(joined_date, str):
+                    joined_date = datetime.fromisoformat(joined_date.replace('Z', '+00:00'))
+                years_service = (datetime.utcnow() - joined_date).days / 365.25
                 context["years_service"] = years_service
             
             context["staff_type"] = staff.staff_type.value if staff.staff_type else ""

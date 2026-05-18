@@ -99,6 +99,8 @@ async def get_student_dashboard(
     session: AsyncSession = Depends(get_session)
 ):
     """Get student dashboard overview, optionally filtered by academic term"""
+    from sqlalchemy import or_
+    
     student = await get_student_record(current_user, session)
     
     # Get class info
@@ -144,9 +146,14 @@ async def get_student_dashboard(
     # Get fee balance
     fee_query = select(Fee).where(Fee.student_id == student.id)
     
-    # Filter by term if provided
+    # Filter by term if provided - include fees with matching term OR no term set
     if term_id:
-        fee_query = fee_query.where(Fee.academic_term_id == term_id)
+        fee_query = fee_query.where(
+            or_(
+                Fee.academic_term_id == term_id,
+                Fee.academic_term_id == None
+            )
+        )
     
     fee_result = await session.execute(fee_query)
     fees = fee_result.scalars().all()
@@ -465,14 +472,21 @@ async def get_my_fees(
     session: AsyncSession = Depends(get_session)
 ):
     """Get student's fee details, optionally filtered by academic term"""
+    from sqlalchemy import or_
+    
     student = await get_student_record(current_user, session)
     
-    # Build query for fees
+    # Build query for fees - get all student fees
     query = select(Fee).where(Fee.student_id == student.id)
     
-    # Filter by term if provided
+    # Filter by term if provided - include fees with matching term OR no term set
     if term_id:
-        query = query.where(Fee.academic_term_id == term_id)
+        query = query.where(
+            or_(
+                Fee.academic_term_id == term_id,
+                Fee.academic_term_id == None
+            )
+        )
     
     fee_result = await session.execute(query)
     fees = fee_result.scalars().all()
@@ -502,13 +516,17 @@ async def get_my_fees(
         structure = structures.get(fee.fee_structure_id)
         fee_payments = [p for p in payments if p.fee_id == fee.id]
         
+        # Calculate balance (handle case where discount might be None)
+        discount = fee.discount if fee.discount else 0
+        balance = fee.amount_due - fee.amount_paid - discount
+        
         fees_list.append({
             "id": fee.id,
             "fee_type": structure.fee_type if structure else "unknown",
             "description": structure.description if structure else None,
             "amount_due": fee.amount_due,
             "amount_paid": fee.amount_paid,
-            "balance": fee.amount_due - fee.amount_paid - fee.discount,
+            "balance": balance,
             "status": fee.status,
             "due_date": structure.due_date if structure else None,
             "payments_count": len(fee_payments)
