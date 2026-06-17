@@ -13,6 +13,8 @@ class UserRole(str, Enum):
     TEACHER = "teacher"
     STUDENT = "student"
     PARENT = "parent"
+    SECURITY_OFFICER = "security_officer"
+    DRIVER = "driver"
 
 
 class UserBase(SQLModel):

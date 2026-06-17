@@ -74,6 +74,7 @@ async def register_routers(app: FastAPI):
     from routers.teacher_dashboard import router as teacher_dashboard_router
     from routers.settlements import router as settlements_router
     from routers.billing import router as billing_router
+    from routers.security import router as security_router
 
     # Register all routers
     app.include_router(auth_router, prefix="/api")
@@ -118,7 +119,8 @@ async def register_routers(app: FastAPI):
     app.include_router(teacher_assignments_router, prefix="/api")
     app.include_router(teacher_dashboard_router, prefix="/api")
     app.include_router(billing_router, prefix="/api")
-    
+    app.include_router(security_router, prefix="/api")
+
     logger.info("✓ All routers loaded successfully")
 
 

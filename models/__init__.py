@@ -1,4 +1,12 @@
 """Models package"""
+import models.finance  # registers all finance tables with SQLModel metadata
+from models.security import (
+    StudentSecurityProfile, StudentSecurityProfileCreate, StudentSecurityProfileUpdate,
+    DailyQRToken, SecurityScanLog, ArrivalEvent, ParentNote, ParentNoteCreate,
+    LiveBusLocation, LiveBusLocationCreate,
+    CollectorTrackingSession, CollectorLiveLocation, CollectorLocationCreate,
+    ArrivalStatus, QRTokenType, ScanResult, ArrivalEventType,
+)
 from models.user import User, UserCreate, UserLogin, UserResponse, UserRole
 from models.school import School, SchoolCreate, SchoolType, AcademicTerm, AcademicTermCreate, TermType
 from models.student import Student, StudentCreate, StudentStatus, Gender, Parent, ParentCreate, StudentParent
@@ -126,4 +134,10 @@ __all__ = [
     # OTP Module
     "OTP", "OTPBase", "OTPSettings", "OTPVerificationRequest", "OTPVerificationResponse",
     "OTPAdminSettings",
+    # Security Module
+    "StudentSecurityProfile", "StudentSecurityProfileCreate", "StudentSecurityProfileUpdate",
+    "DailyQRToken", "SecurityScanLog", "ArrivalEvent", "ParentNote", "ParentNoteCreate",
+    "LiveBusLocation", "LiveBusLocationCreate",
+    "CollectorTrackingSession", "CollectorLiveLocation", "CollectorLocationCreate",
+    "ArrivalStatus", "QRTokenType", "ScanResult", "ArrivalEventType",
 ]
