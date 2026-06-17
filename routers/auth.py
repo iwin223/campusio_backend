@@ -1,8 +1,12 @@
 """Authentication router with integrated OTP support"""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
+import csv
+import io
+import secrets
+import string
 from models.user import User, UserCreate, UserLogin, UserRole
 from models.otp import (
     OTPVerificationRequest, OTPVerificationResponse, OTPSettings,
@@ -25,51 +29,71 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 MANDATORY_OTP_ROLES = {UserRole.SCHOOL_ADMIN, UserRole.HR, UserRole.SUPER_ADMIN}
 
 
+def _generate_password(length: int = 12) -> str:
+    alphabet = string.ascii_letters + string.digits + "!@#$%"
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
 @router.post("/register", response_model=dict)
-async def register(user_data: UserCreate, session: AsyncSession = Depends(get_session)):
-    """Register a new user"""
-    # Check if email exists
+async def register(
+    user_data: UserCreate,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Create a new user account (admin only). Public self-registration is not permitted."""
+    if user_data.role == UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot create super admin accounts via this endpoint"
+        )
+
+    if current_user.role == UserRole.SCHOOL_ADMIN:
+        if user_data.role == UserRole.SCHOOL_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="School admins cannot create other school admin accounts"
+            )
+        if user_data.school_id and user_data.school_id != current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only create users for your own school"
+            )
+        user_data.school_id = current_user.school_id
+
     result = await session.execute(select(User).where(User.email == user_data.email))
     if result.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
-    if user_data.role == UserRole.SUPER_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot register super admin accounts"
-        )
-    
+
+    plain_password = user_data.password or _generate_password()
+
     user = User(
         email=user_data.email,
-        password_hash=get_password_hash(user_data.password),
+        password_hash=get_password_hash(plain_password),
+        plain_text_password=plain_password,
         first_name=user_data.first_name,
         last_name=user_data.last_name,
         phone=user_data.phone,
         role=user_data.role,
-        school_id=user_data.school_id
+        school_id=user_data.school_id,
+        must_change_password=True,
     )
-    
+
     session.add(user)
     await session.commit()
     await session.refresh(user)
-    
-    # Create OTP settings (mandatory for sensitive roles, optional for others)
+
     is_mandatory = user.role in MANDATORY_OTP_ROLES
     await create_or_update_otp_settings(
         session=session,
         user_id=user.id,
         is_enabled=is_mandatory,
-        method="sms"  # Default to SMS
+        method="sms"
     )
-    
-    access_token = create_access_token(data={"sub": user.id})
-    
+
     return {
-        "access_token": access_token,
-        "token_type": "bearer",
         "user": {
             "id": user.id,
             "email": user.email,
@@ -79,9 +103,101 @@ async def register(user_data: UserCreate, session: AsyncSession = Depends(get_se
             "role": user.role,
             "school_id": user.school_id,
             "is_active": user.is_active,
+            "must_change_password": user.must_change_password,
             "created_at": user.created_at.isoformat(),
-            "last_login": None
-        }
+        },
+        "generated_password": plain_password,
+        "message": "Account created. Share these credentials with the user — they must change their password on first login."
+    }
+
+
+@router.post("/register/bulk", response_model=dict)
+async def bulk_register(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Bulk-create user accounts from a CSV file (admin only).
+
+    Required columns: email, first_name, last_name, role
+    Optional columns: phone, school_id
+    """
+    content = await file.read()
+    try:
+        reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Unable to parse CSV file")
+
+    required_cols = {"email", "first_name", "last_name", "role"}
+    if not required_cols.issubset(set(reader.fieldnames or [])):
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV must contain columns: {', '.join(sorted(required_cols))}"
+        )
+
+    created, skipped = [], []
+
+    for i, row in enumerate(reader, start=2):
+        email = (row.get("email") or "").strip().lower()
+        first_name = (row.get("first_name") or "").strip()
+        last_name = (row.get("last_name") or "").strip()
+        role_val = (row.get("role") or "").strip().lower()
+        phone = (row.get("phone") or "").strip() or None
+        school_id = (row.get("school_id") or "").strip() or None
+
+        if not email or not first_name or not last_name or not role_val:
+            skipped.append({"row": i, "reason": "Missing required field", "email": email})
+            continue
+
+        try:
+            role = UserRole(role_val)
+        except ValueError:
+            skipped.append({"row": i, "reason": f"Unknown role '{role_val}'", "email": email})
+            continue
+
+        if role == UserRole.SUPER_ADMIN:
+            skipped.append({"row": i, "reason": "Cannot create super_admin via bulk import", "email": email})
+            continue
+
+        if current_user.role == UserRole.SCHOOL_ADMIN:
+            if role == UserRole.SCHOOL_ADMIN:
+                skipped.append({"row": i, "reason": "School admins cannot create other school_admin accounts", "email": email})
+                continue
+            school_id = current_user.school_id
+
+        existing = await session.execute(select(User).where(User.email == email))
+        if existing.scalar_one_or_none():
+            skipped.append({"row": i, "reason": "Email already registered", "email": email})
+            continue
+
+        plain_password = _generate_password()
+        user = User(
+            email=email,
+            password_hash=get_password_hash(plain_password),
+            plain_text_password=plain_password,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            role=role,
+            school_id=school_id,
+            must_change_password=True,
+        )
+        session.add(user)
+        await session.flush()
+
+        is_mandatory = role in MANDATORY_OTP_ROLES
+        await create_or_update_otp_settings(session=session, user_id=user.id, is_enabled=is_mandatory, method="sms")
+
+        created.append({"email": email, "name": f"{first_name} {last_name}", "role": role_val, "generated_password": plain_password})
+
+    await session.commit()
+
+    return {
+        "created": len(created),
+        "skipped": len(skipped),
+        "accounts": created,
+        "errors": skipped,
     }
 
 
@@ -180,6 +296,7 @@ async def login(credentials: UserLogin, session: AsyncSession = Depends(get_sess
                 "role": user.role,
                 "school_id": user.school_id,
                 "is_active": user.is_active,
+                "must_change_password": user.must_change_password,
                 "created_at": user.created_at.isoformat(),
                 "last_login": user.last_login.isoformat() if user.last_login else None
             }
@@ -230,6 +347,7 @@ async def verify_otp_code(
             "role": user.role,
             "school_id": user.school_id,
             "is_active": user.is_active,
+            "must_change_password": user.must_change_password,
             "created_at": user.created_at.isoformat(),
             "last_login": user.last_login.isoformat() if user.last_login else None
         }
@@ -304,9 +422,34 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "role": current_user.role,
         "school_id": current_user.school_id,
         "is_active": current_user.is_active,
+        "must_change_password": current_user.must_change_password,
         "created_at": current_user.created_at.isoformat(),
         "last_login": current_user.last_login.isoformat() if current_user.last_login else None
     }
+
+
+@router.post("/change-password", response_model=dict)
+async def change_password(
+    body: dict,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Change password. Required on first login when must_change_password is True."""
+    new_password = body.get("new_password", "")
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters"
+        )
+
+    current_user.password_hash = get_password_hash(new_password)
+    current_user.plain_text_password = None
+    current_user.must_change_password = False
+    current_user.updated_at = datetime.utcnow()
+    session.add(current_user)
+    await session.commit()
+
+    return {"message": "Password changed successfully"}
 
 
 @router.get("/users", response_model=list[dict])
@@ -340,6 +483,7 @@ async def list_users(
             "role": u.role,
             "school_id": u.school_id,
             "is_active": u.is_active,
+            "must_change_password": u.must_change_password,
             "created_at": u.created_at.isoformat(),
             "last_login": u.last_login.isoformat() if u.last_login else None
         }

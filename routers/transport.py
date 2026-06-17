@@ -19,6 +19,7 @@ from models.transport import (
     DriverStaff, DriverStaffCreate, DriverStaffUpdate
 )
 from models.student import Student
+from models.staff import Staff
 from models.user import User, UserRole
 from database import get_session
 from auth import get_current_user, require_roles
@@ -219,20 +220,46 @@ async def list_routes(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
-    """List all transport routes"""
+    """List transport routes. Drivers see only routes assigned to their vehicle."""
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
-    
+
     query = select(Route).where(Route.school_id == school_id)
-    
+
+    if current_user.role == UserRole.DRIVER:
+        # Resolve: User → Staff → DriverStaff → Vehicle → Route
+        staff_result = await session.execute(
+            select(Staff).where(Staff.user_id == current_user.id)
+        )
+        staff = staff_result.scalar_one_or_none()
+        if staff:
+            driver_staff_result = await session.execute(
+                select(DriverStaff).where(DriverStaff.staff_id == staff.id)
+            )
+            driver_staff = driver_staff_result.scalar_one_or_none()
+            if driver_staff:
+                vehicle_result = await session.execute(
+                    select(Vehicle).where(Vehicle.driver_id == driver_staff.id)
+                )
+                vehicles = vehicle_result.scalars().all()
+                vehicle_ids = [v.id for v in vehicles]
+                if vehicle_ids:
+                    query = query.where(Route.vehicle_id.in_(vehicle_ids))
+                else:
+                    return []
+            else:
+                return []
+        else:
+            return []
+
     if status:
         query = query.where(Route.status == status)
-    
+
     query = query.offset(skip).limit(limit)
     result = await session.execute(query)
     routes = result.scalars().all()
-    
+
     return [
         {
             **jsonable_encoder(r),

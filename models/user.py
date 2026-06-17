@@ -29,10 +29,11 @@ class UserBase(SQLModel):
 
 class User(UserBase, table=True):
     __tablename__ = "users"
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     password_hash: str
     plain_text_password: Optional[str] = None  # Only for portal accounts
+    must_change_password: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     last_login: Optional[datetime] = None
@@ -62,5 +63,6 @@ class UserResponse(SQLModel):
     role: UserRole
     school_id: Optional[str]
     is_active: bool
+    must_change_password: bool = False
     created_at: datetime
     last_login: Optional[datetime]

@@ -19,6 +19,7 @@ from models.security import (
     ArrivalStatus,
 )
 from models.student import Student
+from models.classroom import Class
 from models.user import User, UserRole
 from database import get_session
 from auth import get_current_user, require_roles
@@ -823,7 +824,7 @@ async def end_collector_session(
 async def get_admin_overview(
     school_id: str,
     db: AsyncSession = Depends(get_session),
-    current_user: User = Depends(require_roles(*ADMIN_ROLES)),
+    current_user: User = Depends(require_roles(*OFFICER_ROLES)),
 ):
     """
     Single endpoint for the admin tracking page.
@@ -836,6 +837,14 @@ async def get_admin_overview(
     )
     rows = students_result.all()
 
+    # Build class name lookup to avoid N+1 queries
+    class_ids = {student.current_class_id for _, student in rows if student.current_class_id}
+    class_names: dict[str, str] = {}
+    if class_ids:
+        classes_result = await db.exec(select(Class).where(Class.id.in_(class_ids)))
+        for cls in classes_result.all():
+            class_names[cls.id] = cls.name
+
     student_data = []
     for profile, student in rows:
         last_note_result = await db.exec(
@@ -845,7 +854,6 @@ async def get_admin_overview(
         )
         last_note = last_note_result.first()
 
-        # Check for active collector session
         collector_result = await db.exec(
             select(CollectorTrackingSession).where(
                 and_(
@@ -859,7 +867,7 @@ async def get_admin_overview(
         student_data.append({
             "id": student.id,
             "name": f"{student.first_name} {student.last_name}",
-            "class": student.current_class_id,
+            "class": class_names.get(student.current_class_id, student.current_class_id),
             "gender": student.gender,
             "pickup_method": profile.pickup_method,
             "transport_route_id": profile.transport_route_id,
