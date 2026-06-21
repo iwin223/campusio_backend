@@ -1,6 +1,6 @@
 """Authentication router with integrated OTP support"""
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from sqlmodel import select
+from sqlmodel import select, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 import csv
@@ -8,9 +8,14 @@ import io
 import secrets
 import string
 from models.user import User, UserCreate, UserLogin, UserRole
+
+
+class ChangePasswordRequest(SQLModel):
+    new_password: str
 from models.otp import (
     OTPVerificationRequest, OTPVerificationResponse, OTPSettings,
-    OTPAdminSettings, OTPAdminSettingsRequest, OTPAdminSettingsResponse
+    OTPAdminSettings, OTPAdminSettingsRequest, OTPAdminSettingsResponse,
+    OTPSettingsUpdateRequest, OTPResendRequest
 )
 from database import get_session
 from auth import (
@@ -356,11 +361,11 @@ async def verify_otp_code(
 
 @router.post("/resend-otp", response_model=dict)
 async def resend_otp(
-    email: str,
+    data: OTPResendRequest,
     session: AsyncSession = Depends(get_session)
 ):
     """Resend OTP to user"""
-    result = await session.execute(select(User).where(User.email == email))
+    result = await session.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     
     if not user:
@@ -430,12 +435,12 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.post("/change-password", response_model=dict)
 async def change_password(
-    body: dict,
+    body: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
     """Change password. Required on first login when must_change_password is True."""
-    new_password = body.get("new_password", "")
+    new_password = body.new_password
     if len(new_password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -536,29 +541,28 @@ async def get_otp_settings_endpoint(
 
 @router.post("/otp-settings/update", response_model=dict)
 async def update_otp_settings(
-    is_enabled: bool,
-    method: str = "sms",
+    data: OTPSettingsUpdateRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
     """Update user's OTP settings"""
-    if current_user.role in MANDATORY_OTP_ROLES and not is_enabled:
+    if current_user.role in MANDATORY_OTP_ROLES and not data.is_enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"OTP is mandatory for {current_user.role} role"
         )
-    
-    if method not in ["email", "sms"]:
+
+    if data.method not in ["email", "sms"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Method must be 'email' or 'sms'"
         )
-    
+
     otp_settings = await create_or_update_otp_settings(
         session=session,
         user_id=current_user.id,
-        is_enabled=is_enabled,
-        method=method
+        is_enabled=data.is_enabled,
+        method=data.method
     )
     
     return {

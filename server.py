@@ -162,6 +162,9 @@ register_middleware(app)
 from fastapi.staticfiles import StaticFiles
 app.mount("/templates", StaticFiles(directory="templates"), name="templates")
 
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 
 @app.get("/api")
 async def root():

@@ -349,12 +349,27 @@ async def add_student_accommodation(
     )
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Student already has hostel accommodation")
-    
+
+    # Enforce room capacity and keep occupancy accurate when a room is assigned up front
+    room = None
+    if accommodation_data.room_id:
+        room_result = await session.execute(select(Room).where(Room.id == accommodation_data.room_id))
+        room = room_result.scalar_one_or_none()
+        if not room:
+            raise HTTPException(status_code=404, detail="Room not found")
+        if room.current_occupancy >= room.capacity:
+            raise HTTPException(status_code=400, detail="Room is at full capacity")
+
     accommodation = StudentHostel(**accommodation_data.dict(), school_id=school_id)
     session.add(accommodation)
+
+    if room:
+        room.current_occupancy += 1
+        session.add(room)
+
     await session.commit()
     await session.refresh(accommodation)
-    
+
     return {**jsonable_encoder(accommodation), "status": accommodation.status.value}
 
 
@@ -435,16 +450,43 @@ async def update_student_accommodation(
     accommodation = result.scalar_one_or_none()
     if not accommodation:
         raise HTTPException(status_code=404, detail="Accommodation not found")
-    
+
+    old_room_id = accommodation.room_id
+    old_was_active = accommodation.status == StudentHostelStatus.ACTIVE
+
     update_data = accommodation_data.dict(exclude_unset=True)
     for key, value in update_data.items():
         setattr(accommodation, key, value)
-    
+
     accommodation.updated_at = datetime.utcnow()
+
+    new_room_id = accommodation.room_id
+    new_is_active = accommodation.status == StudentHostelStatus.ACTIVE
+
+    # Free the old room's bed if the student moved rooms, or is no longer
+    # an active resident (e.g. graduated/transferred/inactive)
+    if old_room_id and old_was_active and (old_room_id != new_room_id or not new_is_active):
+        old_room_result = await session.execute(select(Room).where(Room.id == old_room_id))
+        old_room = old_room_result.scalar_one_or_none()
+        if old_room and old_room.current_occupancy > 0:
+            old_room.current_occupancy -= 1
+            session.add(old_room)
+
+    # Occupy the new room's bed if a different room was assigned and the student is (still) active
+    if new_room_id and new_room_id != old_room_id and new_is_active:
+        new_room_result = await session.execute(select(Room).where(Room.id == new_room_id))
+        new_room = new_room_result.scalar_one_or_none()
+        if not new_room:
+            raise HTTPException(status_code=404, detail="Room not found")
+        if new_room.current_occupancy >= new_room.capacity:
+            raise HTTPException(status_code=400, detail="Room is at full capacity")
+        new_room.current_occupancy += 1
+        session.add(new_room)
+
     session.add(accommodation)
     await session.commit()
     await session.refresh(accommodation)
-    
+
     return {**jsonable_encoder(accommodation), "status": accommodation.status.value}
 
 
@@ -1289,10 +1331,20 @@ async def delete_accommodation(
     accommodation = result.scalar_one_or_none()
     if not accommodation:
         raise HTTPException(status_code=404, detail="Accommodation not found")
-    
+
+    # Free the room's bed before removing the accommodation record (only if
+    # it was actively occupying one — inactive/graduated/transferred records
+    # already had their bed freed when their status changed)
+    if accommodation.room_id and accommodation.status == StudentHostelStatus.ACTIVE:
+        room_result = await session.execute(select(Room).where(Room.id == accommodation.room_id))
+        room = room_result.scalar_one_or_none()
+        if room and room.current_occupancy > 0:
+            room.current_occupancy -= 1
+            session.add(room)
+
     await session.delete(accommodation)
     await session.commit()
-    
+
     return {"message": "Accommodation deleted successfully", "id": accommodation_id}
 
 

@@ -29,12 +29,14 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 
 
 def get_billing_service() -> PlatformBillingService:
-    """Initialize billing service"""
+    """Initialize billing service.
+
+    Paystack key is optional here — most billing endpoints (metrics, current
+    subscription, invoices) are pure DB reads and never touch Paystack. Only
+    endpoints that actually initiate/verify a payment need a real key, and
+    those will fail naturally (with a clear Paystack API error) if it's missing.
+    """
     paystack_secret_key = os.getenv("PAYSTACK_SECRET_KEY", "")
-    
-    if not paystack_secret_key:
-        raise ValueError("PAYSTACK_SECRET_KEY not configured in .env")
-    
     return PlatformBillingService(paystack_secret_key)
 
 

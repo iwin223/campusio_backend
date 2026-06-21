@@ -1,5 +1,5 @@
 """Students router"""
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, UploadFile, File
 from sqlmodel import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -14,6 +14,7 @@ from models.otp import OTPSettings, OTP
 from database import get_session
 from auth import get_current_user, require_roles, get_password_hash
 from services.csv_import_service import CSVImportService
+from services.email_service import email_service
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
@@ -85,12 +86,13 @@ async def _create_portal_user(
     user = User(
         email=email,
         password_hash=get_password_hash(password),
-        plain_text_password=password,  # Store plain text for admin access
+        plain_text_password=password,
         first_name=first_name,
         last_name=last_name,
         role=role,
         school_id=school_id,
-        is_active=True
+        is_active=True,
+        must_change_password=True
     )
     
     try:
@@ -123,6 +125,9 @@ async def create_student(
     if not school_id:
         raise HTTPException(status_code=400, detail="No school context")
     
+    if not student_data.student_id:
+        student_data.student_id = f"STU-{datetime.now().year}-{secrets.token_hex(3).upper()}"
+
     result = await session.execute(
         select(Student).where(
             Student.school_id == school_id,
@@ -131,7 +136,7 @@ async def create_student(
     )
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Student ID already exists")
-    
+
     student = Student(school_id=school_id, **student_data.model_dump())
     session.add(student)
     await session.flush()
@@ -534,19 +539,24 @@ async def get_student_parents(
 async def add_parent(
     student_id: str,
     parent_data: ParentCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
     """Add a parent/guardian to a student"""
     result = await session.execute(select(Student).where(Student.id == student_id))
     student = result.scalar_one_or_none()
-    
+
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
+
     if current_user.role == UserRole.SCHOOL_ADMIN and current_user.school_id != student.school_id:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
+    school_result = await session.execute(select(School).where(School.id == student.school_id))
+    school = school_result.scalar_one_or_none()
+    school_name = school.name if school else "School ERP"
+
     parent = Parent(school_id=student.school_id, **parent_data.model_dump())
     session.add(parent)
     await session.flush()
@@ -565,6 +575,19 @@ async def add_parent(
     session.add(parent)
     await session.commit()
     await session.refresh(parent)
+
+    if parent.email:
+        student_name = f"{student.first_name} {student.last_name}"
+        parent_name = f"{parent.first_name} {parent.last_name}"
+        background_tasks.add_task(
+            email_service.send_portal_credentials,
+            to=parent.email,
+            parent_name=parent_name,
+            student_name=student_name,
+            login_email=portal_user.email,
+            temp_password=portal_password,
+            school_name=school_name,
+        )
 
     return {
         "id": parent.id,

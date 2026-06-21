@@ -99,15 +99,24 @@ async def get_dashboard_overview(
     )
     
     row = stats_result.first()
-    
+
     total_fees = row.total_fees or 0
     collected = row.total_fees_collected or 0
     outstanding = total_fees - collected
     present = row.present_count or 0
     absent = row.absent_count or 0
-    
+
+    current_term_result = await session.execute(
+        select(AcademicTerm).where(
+            AcademicTerm.school_id == school_id,
+            AcademicTerm.is_current == True
+        )
+    )
+    has_current_term = current_term_result.scalar_one_or_none() is not None
+
     return {
         "role": current_user.role,
+        "has_current_term": has_current_term,
         "stats": {
             "total_students": row.total_students or 0,
             "total_staff": row.total_staff or 0,

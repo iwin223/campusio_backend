@@ -44,7 +44,7 @@ class Student(SQLModel, table=True):
 
 
 class StudentCreate(SQLModel):
-    student_id: str
+    student_id: Optional[str] = None
     first_name: str
     last_name: str
     other_names: Optional[str] = None

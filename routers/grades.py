@@ -903,7 +903,10 @@ async def download_report_card_pdf(
         select(AcademicTerm).where(AcademicTerm.id == academic_term_id)
     )
     academic_term = academic_term_result.scalar_one_or_none()
-    term_name = academic_term.name if academic_term else f"Term {academic_term_id}"
+    term_name = (
+        f"{academic_term.academic_year} — {academic_term.term.value.capitalize()} Term"
+        if academic_term else f"Term {academic_term_id}"
+    )
     
     # Get class name
     if student.class_id:
@@ -1323,7 +1326,10 @@ async def bulk_download_report_cards(
                     grades=grades,
                     subjects_map=subjects,
                     student=student_data,
-                    academic_term_name=academic_term.name if academic_term else None
+                    academic_term_name=(
+                        f"{academic_term.academic_year} — {academic_term.term.value.capitalize()} Term"
+                        if academic_term else None
+                    )
                 )
                 
                 # Generate PDF

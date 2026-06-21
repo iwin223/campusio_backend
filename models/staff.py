@@ -46,7 +46,7 @@ class Staff(SQLModel, table=True):
 
 
 class StaffCreate(SQLModel):
-    staff_id: str
+    staff_id: Optional[str] = None
     first_name: str
     last_name: str
     other_names: Optional[str] = None
@@ -74,3 +74,8 @@ class TeacherAssignment(SQLModel, table=True):
     academic_term_id: str = Field(index=True)
     is_class_teacher: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TeacherAssignmentUpdate(SQLModel):
+    staff_id: Optional[str] = None
+    is_class_teacher: Optional[bool] = None

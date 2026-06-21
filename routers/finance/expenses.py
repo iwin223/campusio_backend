@@ -18,6 +18,7 @@ EXPENSE LIFECYCLE:
 - POSTED: Posted to GL (immutable)
 - REJECTED: Rejected during approval (no GL posting)
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
@@ -37,12 +38,42 @@ from models.finance import (
     ExpensePaymentRequest,
     ExpenseSummary,
 )
+from models.finance.gl_audit_log import AuditActionType, AuditEntityType
 from models.user import User, UserRole
 from database import get_session
 from auth import get_current_user, require_roles
 from services.expense_service import ExpenseService, ExpenseError, ExpenseValidationError
+from services.gl_audit_log_service import GLAuditLogService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/expenses", tags=["Finance - Expenses"])
+
+
+async def _log_gl_audit(
+    session: AsyncSession,
+    school_id: str,
+    entity_id: str,
+    action: AuditActionType,
+    current_user: User,
+    old_values: Optional[dict] = None,
+    new_values: Optional[dict] = None,
+) -> None:
+    """Best-effort GL audit log write — never blocks the actual mutation if it fails."""
+    try:
+        await GLAuditLogService(session).log_action(
+            school_id=school_id,
+            entity_type=AuditEntityType.EXPENSE,
+            entity_id=entity_id,
+            action=action,
+            user_id=current_user.id,
+            user_name=f"{current_user.first_name} {current_user.last_name}",
+            user_role=current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
+            old_values=old_values,
+            new_values=new_values,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write GL audit log for expense {entity_id}: {e}")
 
 
 # ==================== Expense Creation ====================
@@ -106,6 +137,11 @@ async def create_expense(
             school_id=school_id,
             expense_data=expense_data,
             created_by=current_user.id,
+        )
+        await _log_gl_audit(
+            session, school_id, expense["id"], AuditActionType.EXPENSE_CREATED, current_user,
+            new_values={"category": expense_data.category, "description": expense_data.description,
+                        "amount": expense_data.amount},
         )
         return ExpenseResponse.model_validate(expense)
     except ExpenseValidationError as e:
@@ -279,6 +315,10 @@ async def update_expense(
             expense_id=expense_id,
             update_data=update_data,
         )
+        await _log_gl_audit(
+            session, school_id, expense_id, AuditActionType.EXPENSE_UPDATED, current_user,
+            new_values=update_data.model_dump(exclude_unset=True),
+        )
         return ExpenseResponse.model_validate(updated_expense)
     except ExpenseValidationError as e:
         raise HTTPException(
@@ -340,6 +380,10 @@ async def submit_expense(
             expense_id=expense_id,
             submitted_by=current_user.id,
         )
+        await _log_gl_audit(
+            session, school_id, expense_id, AuditActionType.EXPENSE_SUBMITTED, current_user,
+            new_values={"submission_notes": request.submission_notes},
+        )
         return ExpenseResponse.model_validate(submitted_expense)
     except ExpenseError as e:
         raise HTTPException(
@@ -394,6 +438,10 @@ async def approve_expense(
             approved_by=current_user.id,
             approval_notes=request.approval_notes,
         )
+        await _log_gl_audit(
+            session, school_id, expense_id, AuditActionType.EXPENSE_APPROVED, current_user,
+            new_values={"approval_notes": request.approval_notes},
+        )
         return ExpenseResponse.model_validate(approved_expense)
     except ExpenseError as e:
         raise HTTPException(
@@ -447,6 +495,10 @@ async def reject_expense(
             expense_id=expense_id,
             rejected_by=current_user.id,
             rejection_reason=request.rejection_reason,
+        )
+        await _log_gl_audit(
+            session, school_id, expense_id, AuditActionType.EXPENSE_REJECTED, current_user,
+            new_values={"rejection_reason": request.rejection_reason},
         )
         return ExpenseResponse.model_validate(rejected_expense)
     except ExpenseError as e:
@@ -505,6 +557,10 @@ async def post_expense_to_gl(
             school_id=school_id,
             expense_id=expense_id,
             posted_by=current_user.id,
+        )
+        await _log_gl_audit(
+            session, school_id, expense_id, AuditActionType.EXPENSE_POSTED, current_user,
+            new_values={"journal_entry_id": posted_expense.get("journal_entry_id")},
         )
         return ExpenseResponse.model_validate(posted_expense)
     except ExpenseValidationError as e:
@@ -569,6 +625,11 @@ async def record_expense_payment(
             amount_paid=request.amount_paid,
             paid_by=current_user.id,
             payment_date=request.payment_date,
+        )
+        await _log_gl_audit(
+            session, school_id, expense_id, AuditActionType.EXPENSE_PAYMENT_RECORDED, current_user,
+            new_values={"amount_paid": request.amount_paid, "payment_date": request.payment_date.isoformat()
+                        if hasattr(request.payment_date, "isoformat") else str(request.payment_date)},
         )
         return ExpenseResponse.model_validate(updated_expense)
     except ExpenseValidationError as e:

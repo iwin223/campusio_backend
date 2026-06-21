@@ -159,6 +159,11 @@ class PayrollRunCreate(SQLModel):
     notes: Optional[str] = None
 
 
+class PayrollRunActionRequest(SQLModel):
+    """Request body for approving/rejecting a payroll run"""
+    notes: Optional[str] = None
+
+
 class PayrollLineItem(SQLModel, table=True):
     """Individual staff payroll for a payroll run"""
     __tablename__ = "payroll_line_items"

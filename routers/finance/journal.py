@@ -22,6 +22,7 @@ DOUBLE-ENTRY BOOKKEEPING:
 - Total debits must exactly equal total credits (±0.01 tolerance)
 - All GL accounts must be active and belong to the school
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
@@ -39,12 +40,42 @@ from models.finance import (
     PostingStatus,
     ReferenceType,
 )
+from models.finance.gl_audit_log import AuditActionType, AuditEntityType
 from models.user import User, UserRole
 from database import get_session
 from auth import get_current_user, require_roles
 from services.journal_entry_service import JournalEntryService, JournalEntryError, JournalEntryValidationError
+from services.gl_audit_log_service import GLAuditLogService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/journal-entries", tags=["Finance - Journal Entries"])
+
+
+async def _log_gl_audit(
+    session: AsyncSession,
+    school_id: str,
+    entity_id: str,
+    action: AuditActionType,
+    current_user: User,
+    old_values: Optional[dict] = None,
+    new_values: Optional[dict] = None,
+) -> None:
+    """Best-effort GL audit log write — never blocks the actual mutation if it fails."""
+    try:
+        await GLAuditLogService(session).log_action(
+            school_id=school_id,
+            entity_type=AuditEntityType.JOURNAL_ENTRY,
+            entity_id=entity_id,
+            action=action,
+            user_id=current_user.id,
+            user_name=f"{current_user.first_name} {current_user.last_name}",
+            user_role=current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
+            old_values=old_values,
+            new_values=new_values,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write GL audit log for journal entry {entity_id}: {e}")
 
 
 # ==================== Entry Creation ====================
@@ -121,6 +152,11 @@ async def create_entry(
             school_id=school_id,
             entry_data=entry_data,
             created_by=current_user.id,
+        )
+        await _log_gl_audit(
+            session, school_id, entry.id, AuditActionType.ENTRY_CREATED, current_user,
+            new_values={"description": entry_data.description, "reference_type": entry_data.reference_type,
+                        "line_item_count": len(entry_data.line_items)},
         )
         return JournalEntryResponse.model_validate(entry)
     except JournalEntryValidationError as e:
@@ -404,6 +440,10 @@ async def update_entry(
             entry_id=entry_id,
             update_data=update_data,
         )
+        await _log_gl_audit(
+            session, school_id, entry_id, AuditActionType.ENTRY_UPDATED, current_user,
+            new_values=update_data.model_dump(exclude_unset=True, exclude={"line_items"}),
+        )
         return JournalEntryResponse.model_validate(updated_entry)
     except JournalEntryValidationError as e:
         raise HTTPException(
@@ -456,11 +496,17 @@ async def delete_entry(
         )
     
     service = JournalEntryService(session)
-    
+
+    entry = await service.get_entry_by_id(school_id, entry_id, include_line_items=False)
+
     try:
         await service.delete_entry(
             school_id=school_id,
             entry_id=entry_id,
+        )
+        await _log_gl_audit(
+            session, school_id, entry_id, AuditActionType.ENTRY_DELETED, current_user,
+            old_values={"description": entry.get("description")} if entry else None,
         )
         return None  # 204 No Content
     except JournalEntryError as e:
@@ -549,6 +595,10 @@ async def post_entry(
             entry_id=entry_id,
             posted_by=current_user.id,
             approval_notes=post_request.approval_notes,
+        )
+        await _log_gl_audit(
+            session, school_id, entry_id, AuditActionType.ENTRY_POSTED, current_user,
+            new_values={"approval_notes": post_request.approval_notes},
         )
         return JournalEntryResponse.model_validate(posted_entry)
     except JournalEntryValidationError as e:
@@ -670,7 +720,12 @@ async def reverse_entry(
             reversal_reason=reverse_request.reversal_reason,
             reversal_notes=reverse_request.reversal_notes,
         )
-        
+        await _log_gl_audit(
+            session, school_id, entry_id, AuditActionType.ENTRY_REVERSED, current_user,
+            new_values={"reversal_reason": reverse_request.reversal_reason,
+                        "reversal_entry_id": reversal_entry.id},
+        )
+
         return {
             "message": "Entry reversed successfully",
             "original_entry_id": original_entry.id,

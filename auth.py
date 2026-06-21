@@ -103,6 +103,18 @@ async def get_current_user(
             if cached_user:
                 try:
                     user_dict = json.loads(cached_user)
+                    # Normalize role to lowercase value before reconstructing
+                    # (guards against stale cache with uppercase enum names)
+                    raw_role = user_dict.get("role")
+                    if raw_role:
+                        try:
+                            user_dict["role"] = UserRole(raw_role).value
+                        except ValueError:
+                            # Try by enum name (e.g. "SCHOOL_ADMIN" -> UserRole.SCHOOL_ADMIN)
+                            try:
+                                user_dict["role"] = UserRole[raw_role].value
+                            except KeyError:
+                                user_dict["role"] = None
                     # Reconstruct User object from cached dict
                     user = User(**user_dict)
                     logger.debug(f"User {user_id} loaded from cache")
@@ -129,6 +141,8 @@ async def get_current_user(
                     "role": user.role.value if user.role else None,
                     "is_active": user.is_active,
                     "school_id": str(user.school_id) if user.school_id else None,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
                 }
                 await redis_client.setex(
                     cache_key,
@@ -149,6 +163,11 @@ def require_roles(*roles: UserRole):
     """Dependency to require specific roles"""
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in roles:
+            logger.warning(
+                f"[403] Role check failed: user={current_user.email} "
+                f"role={repr(current_user.role)} type={type(current_user.role).__name__} "
+                f"required={[r.value for r in roles]}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied. Required roles: {[r.value for r in roles]}"

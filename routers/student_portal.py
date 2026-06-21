@@ -1,10 +1,11 @@
 """Student Portal Router - API endpoints for students to view their own information"""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
 from typing import List, Optional
 import json
+import os
 import uuid
 from models.user import User, UserRole
 from models.student import Student
@@ -841,6 +842,95 @@ async def get_assignment_detail(
             "score": submission.score if submission else None,
         } if submission else None,
         "message": "Assignment details retrieved successfully"
+    }
+
+
+MAX_SUBMISSION_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+@router.post("/assignments/{assignment_id}/submit-file", response_model=dict)
+async def submit_assignment_file(
+    assignment_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_roles(UserRole.STUDENT)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Submit an assignment as an uploaded file (PDF, image, document, etc.).
+
+    Kept as a dedicated multipart endpoint, separate from `/submit`, because
+    FastAPI can't mix File()/Form() parsing with the JSON body the quiz-answer
+    submission flow (`/submit` with an `answers` dict) relies on.
+    """
+    student = await get_student_record(current_user, session)
+
+    assignment_result = await session.execute(
+        select(Assignment).where(Assignment.id == assignment_id)
+    )
+    assignment = assignment_result.scalar_one_or_none()
+
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    if assignment.class_id != student.class_id or assignment.school_id != student.school_id:
+        raise HTTPException(status_code=403, detail="You do not have access to this assignment")
+
+    existing_submission_result = await session.execute(
+        select(Submission).where(
+            Submission.assignment_id == assignment_id,
+            Submission.student_id == student.id
+        )
+    )
+    submission = existing_submission_result.scalar_one_or_none()
+
+    if submission and submission.status == SubmissionStatus.GRADED:
+        raise HTTPException(
+            status_code=400,
+            detail="This assignment has already been graded and cannot be submitted again"
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_SUBMISSION_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File exceeds the 10MB submission limit")
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    upload_dir = os.path.join("uploads", "submissions", assignment_id)
+    os.makedirs(upload_dir, exist_ok=True)
+    safe_name = f"{student.id}_{uuid.uuid4().hex[:8]}_{os.path.basename(file.filename or 'submission')}"
+    with open(os.path.join(upload_dir, safe_name), "wb") as f:
+        f.write(contents)
+    file_url = f"/uploads/submissions/{assignment_id}/{safe_name}"
+
+    if not submission:
+        submission = Submission(
+            id=str(uuid.uuid4()),
+            school_id=student.school_id,
+            assignment_id=assignment_id,
+            student_id=student.id,
+            class_id=student.class_id,
+            subject_id=assignment.subject_id,
+            status=SubmissionStatus.SUBMITTED,
+            submission_urls=json.dumps([file_url]),
+            submission_date=datetime.utcnow(),
+            max_score=assignment.points_possible
+        )
+        session.add(submission)
+    else:
+        existing_urls = json.loads(submission.submission_urls) if submission.submission_urls else []
+        existing_urls.append(file_url)
+        submission.submission_urls = json.dumps(existing_urls)
+        submission.status = SubmissionStatus.SUBMITTED
+        submission.submission_date = datetime.utcnow()
+
+    await session.commit()
+    await session.refresh(submission)
+
+    return {
+        "message": "Assignment file submitted successfully",
+        "submission_id": submission.id,
+        "status": submission.status,
+        "file_url": file_url,
+        "submitted_at": submission.submission_date.isoformat() if submission.submission_date else None
     }
 
 

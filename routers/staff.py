@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 import re
 import secrets
-from models.staff import Staff, StaffCreate, StaffType, StaffStatus, TeacherAssignment
+from models.staff import Staff, StaffCreate, StaffType, StaffStatus, TeacherAssignment, TeacherAssignmentUpdate
 from models.classroom import Class, Subject
 from models.school import School
 from models.user import User, UserRole
@@ -93,7 +93,8 @@ async def _create_portal_user(
         last_name=last_name,
         role=role,
         school_id=school_id,
-        is_active=True
+        is_active=True,
+        must_change_password=True
     )
     
     try:
@@ -121,6 +122,9 @@ async def create_staff(
     if not school_id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=400, detail="No school context")
     
+    if not staff_data.staff_id:
+        staff_data.staff_id = f"STF-{datetime.now().year}-{secrets.token_hex(3).upper()}"
+
     result = await session.execute(
         select(Staff).where(
             Staff.school_id == school_id,
@@ -129,7 +133,7 @@ async def create_staff(
     )
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Staff ID already exists")
-    
+
     staff = Staff(school_id=school_id, **staff_data.model_dump())
     session.add(staff)
     await session.commit()
@@ -510,6 +514,64 @@ async def assign_teacher(
     await session.commit()
     
     return {"message": "Teacher assigned successfully", "assignment_id": assignment.id}
+
+
+@router.patch("/{staff_id}/assignments/{assignment_id}", response_model=dict)
+async def update_assignment(
+    staff_id: str,
+    assignment_id: str,
+    data: TeacherAssignmentUpdate,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Update a teacher assignment — replace the teacher and/or toggle the class-teacher flag"""
+    result = await session.execute(
+        select(TeacherAssignment).where(
+            TeacherAssignment.id == assignment_id,
+            TeacherAssignment.staff_id == staff_id
+        )
+    )
+    assignment = result.scalar_one_or_none()
+
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    if current_user.role == UserRole.SCHOOL_ADMIN and current_user.school_id != assignment.school_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    update_data = data.model_dump(exclude_unset=True)
+    new_staff_id = update_data.get("staff_id")
+
+    if new_staff_id and new_staff_id != assignment.staff_id:
+        staff_result = await session.execute(select(Staff).where(Staff.id == new_staff_id))
+        new_staff = staff_result.scalar_one_or_none()
+
+        if not new_staff:
+            raise HTTPException(status_code=404, detail="Staff not found")
+        if new_staff.staff_type != StaffType.TEACHING:
+            raise HTTPException(status_code=400, detail="Staff is not a teacher")
+        if current_user.role == UserRole.SCHOOL_ADMIN and current_user.school_id != new_staff.school_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        dup = await session.execute(
+            select(TeacherAssignment).where(
+                TeacherAssignment.staff_id == new_staff_id,
+                TeacherAssignment.class_id == assignment.class_id,
+                TeacherAssignment.subject_id == assignment.subject_id,
+                TeacherAssignment.academic_term_id == assignment.academic_term_id,
+                TeacherAssignment.id != assignment_id,
+            )
+        )
+        if dup.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="This teacher is already assigned to this subject for this class and term")
+
+    for field, value in update_data.items():
+        setattr(assignment, field, value)
+
+    session.add(assignment)
+    await session.commit()
+
+    return {"message": "Assignment updated successfully"}
 
 
 @router.delete("/{staff_id}/assignments/{assignment_id}", response_model=dict)

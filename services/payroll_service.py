@@ -603,7 +603,70 @@ class PayrollService:
                 "success": False,
                 "message": f"Error approving payroll: {str(e)}"
             }
-    
+
+    async def reject_payroll_run(
+        self,
+        school_id: str,
+        payroll_run_id: str,
+        current_user: User,
+        notes: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Reject a payroll run, sending it back to DRAFT for revision.
+
+        Args:
+            school_id: School identifier
+            payroll_run_id: Payroll run identifier
+            current_user: User rejecting the payroll
+            notes: Optional rejection reason
+
+        Returns:
+            Status dictionary
+        """
+        try:
+            result = await self.session.execute(
+                select(PayrollRun).where(
+                    PayrollRun.id == payroll_run_id,
+                    PayrollRun.school_id == school_id
+                )
+            )
+            payroll_run = result.scalar_one_or_none()
+
+            if not payroll_run:
+                return {
+                    "success": False,
+                    "message": "Payroll run not found"
+                }
+
+            if payroll_run.status != PayrollStatus.GENERATED:
+                return {
+                    "success": False,
+                    "message": f"Cannot reject payroll in {payroll_run.status} status"
+                }
+
+            payroll_run.status = PayrollStatus.REJECTED
+            if notes:
+                payroll_run.notes = notes
+            payroll_run.updated_at = datetime.utcnow()
+
+            self.session.add(payroll_run)
+            await self.session.commit()
+
+            return {
+                "success": True,
+                "message": "Payroll run rejected",
+                "payroll_run_id": payroll_run.id,
+                "status": payroll_run.status
+            }
+
+        except Exception as e:
+            logger.error(f"Error rejecting payroll run: {str(e)}")
+            await self.session.rollback()
+            return {
+                "success": False,
+                "message": f"Error rejecting payroll: {str(e)}"
+            }
+
     async def post_payroll_run(
         self,
         school_id: str,

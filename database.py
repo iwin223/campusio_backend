@@ -1,8 +1,9 @@
 """Database configuration and session management for PostgreSQL"""
 import asyncio
 from sqlmodel import SQLModel
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker 
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 from config import get_settings
 import logging
@@ -48,7 +49,7 @@ async_session = sessionmaker(
 )
 
 
-async def get_session() -> AsyncSession:
+async def get_session() -> AsyncSession:  # type: ignore[override]
     """Dependency to get database session"""
     async with async_session() as session:
         try:

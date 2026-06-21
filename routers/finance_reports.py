@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from database import get_session
 from auth import get_current_user
-from models.user import User
+from models.user import User, UserRole
 from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification 
 from models.finance import GLAccount, JournalLineItem, JournalEntry, PostingStatus, AccountType
 from models.fee import Fee, PaymentStatus as FeeStatus
@@ -479,16 +479,16 @@ async def verify_school_financial_access(
 ) -> str:
     """
     Verify user has access to school financial data.
-    Only admin, accountant, and finance staff can view.
+    Only admins and HR (who handle payroll/finance) can view.
     """
-    allowed_roles = ['admin', 'accountant', 'finance_officer', 'principal']
-    
+    allowed_roles = (UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.HR)
+
     if current_user.role not in allowed_roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Role '{current_user.role}' cannot access financial reports"
         )
-    
+
     return current_user.school_id
 
 

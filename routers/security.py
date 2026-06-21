@@ -1,5 +1,5 @@
 """Student Security Module Router"""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlmodel import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, date, timedelta
@@ -23,6 +23,9 @@ from models.classroom import Class
 from models.user import User, UserRole
 from database import get_session
 from auth import get_current_user, require_roles
+from models.school import School
+from services.email_service import email_service
+from routers.parent import get_parent_children_ids
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,41 @@ def token_expires_at() -> datetime:
     """Tokens expire at midnight of the current day"""
     tomorrow = date.today() + timedelta(days=1)
     return datetime(tomorrow.year, tomorrow.month, tomorrow.day, 0, 0, 0)
+
+
+async def get_or_create_qr_token(db: AsyncSession, student_id: str):
+    """Get (or lazily create) today's parent-pickup QR token for a student.
+    Returns (token, student), or (None, None) if the student doesn't exist."""
+    student_result = await db.exec(select(Student).where(Student.id == student_id))
+    student = student_result.first()
+    if not student:
+        return None, None
+
+    today = today_str()
+    result = await db.exec(
+        select(DailyQRToken).where(
+            and_(
+                DailyQRToken.student_id == student_id,
+                DailyQRToken.issued_date == today,
+                DailyQRToken.token_type == QRTokenType.PARENT_PICKUP,
+            )
+        )
+    )
+    token = result.first()
+    if not token:
+        token = DailyQRToken(
+            token=str(uuid.uuid4()),
+            token_type=QRTokenType.PARENT_PICKUP,
+            school_id=str(student.school_id),
+            student_id=student_id,
+            issued_date=today,
+            expires_at=token_expires_at(),
+        )
+        db.add(token)
+        await db.commit()
+        await db.refresh(token)
+
+    return token, student
 
 
 # ── Student Security Profiles ─────────────────────────────────────────────────
@@ -167,21 +205,88 @@ async def get_student_qr_token(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    """Get today's QR token for a student (parent fetches their own child's token)"""
-    today = today_str()
-    result = await db.exec(
-        select(DailyQRToken).where(
-            and_(
-                DailyQRToken.student_id == student_id,
-                DailyQRToken.issued_date == today,
-                DailyQRToken.token_type == QRTokenType.PARENT_PICKUP,
-            )
-        )
-    )
-    token = result.first()
+    """Get (or lazily create) today's QR token for a student."""
+    token, student = await get_or_create_qr_token(db, student_id)
     if not token:
-        raise HTTPException(status_code=404, detail="No QR token issued for today")
+        raise HTTPException(status_code=404, detail="Student not found")
     return token
+
+
+@router.post("/qr/student/{student_id}/email")
+async def email_student_qr(
+    student_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Email today's pickup QR code to the authenticated parent."""
+    if not current_user.email:
+        raise HTTPException(status_code=400, detail="No email address on your account")
+
+    token, student = await get_or_create_qr_token(db, student_id)
+    if not token:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    school_result = await db.exec(select(School).where(School.id == token.school_id))
+    school = school_result.first()
+    school_name = school.name if school else "School"
+
+    student_name = f"{student.first_name} {student.last_name}" if student else "your child"
+
+    background_tasks.add_task(
+        email_service.send_qr_email,
+        to=current_user.email,
+        student_name=student_name,
+        qr_token=token.token,
+        expires_at=token.expires_at.strftime("%I:%M %p").lstrip("0"),
+        school_name=school_name,
+    )
+
+    return {"message": "QR code emailed successfully"}
+
+
+@router.post("/qr/my-children/email")
+async def email_all_children_qr(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_roles(UserRole.PARENT)),
+):
+    """Email today's pickup QR codes for ALL of the parent's linked children in one message."""
+    if not current_user.email:
+        raise HTTPException(status_code=400, detail="No email address on your account")
+
+    child_ids = await get_parent_children_ids(current_user, db)
+    if not child_ids:
+        raise HTTPException(status_code=404, detail="No children linked to your account")
+
+    children_payload = []
+    school_id = None
+    for student_id in child_ids:
+        token, student = await get_or_create_qr_token(db, student_id)
+        if not token:
+            continue
+        school_id = school_id or token.school_id
+        children_payload.append({
+            "name": f"{student.first_name} {student.last_name}",
+            "qr_token": token.token,
+            "expires_at": token.expires_at.strftime("%I:%M %p").lstrip("0"),
+        })
+
+    if not children_payload:
+        raise HTTPException(status_code=404, detail="No QR codes available for your children")
+
+    school_result = await db.exec(select(School).where(School.id == school_id))
+    school = school_result.first()
+    school_name = school.name if school else "School"
+
+    background_tasks.add_task(
+        email_service.send_multi_qr_email,
+        to=current_user.email,
+        children=children_payload,
+        school_name=school_name,
+    )
+
+    return {"message": "QR codes emailed successfully", "children_count": len(children_payload)}
 
 
 @router.post("/qr/transport/{route_id}")
@@ -344,27 +449,71 @@ async def get_all_students_status(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(require_roles(*OFFICER_ROLES)),
 ):
-    """All students with their current security profiles — for dashboard and admin map"""
-    result = await db.exec(
-        select(StudentSecurityProfile, Student).join(
-            Student, Student.id == StudentSecurityProfile.student_id
-        ).where(StudentSecurityProfile.school_id == school_id)
+    """All students in the school with their security status.
+    Auto-creates a default profile for any student that doesn't have one yet."""
+
+    # Fetch all students in the school
+    all_students_result = await db.exec(
+        select(Student).where(Student.school_id == school_id)
     )
-    rows = result.all()
+    all_students = all_students_result.all()
+
+    if not all_students:
+        return []
+
+    student_ids = [s.id for s in all_students]
+
+    # Fetch existing profiles
+    profiles_result = await db.exec(
+        select(StudentSecurityProfile).where(
+            StudentSecurityProfile.student_id.in_(student_ids)
+        )
+    )
+    profiles_by_student = {p.student_id: p for p in profiles_result.all()}
+
+    # Auto-create missing profiles in bulk then re-fetch to avoid SQLAlchemy expiry
+    missing = [s for s in all_students if s.id not in profiles_by_student]
+    if missing:
+        for student in missing:
+            db.add(StudentSecurityProfile(student_id=student.id, school_id=school_id))
+        await db.commit()
+        # Re-fetch both students and profiles — commit() expires all loaded objects
+        all_students_result2 = await db.exec(
+            select(Student).where(Student.school_id == school_id)
+        )
+        all_students = all_students_result2.all()
+        profiles_result2 = await db.exec(
+            select(StudentSecurityProfile).where(
+                StudentSecurityProfile.student_id.in_(student_ids)
+            )
+        )
+        profiles_by_student = {p.student_id: p for p in profiles_result2.all()}
+
+    # Resolve class names in one query
+    class_ids = {s.class_id for s in all_students if s.class_id}
+    class_names: dict[str, str] = {}
+    if class_ids:
+        classes_result = await db.exec(select(Class).where(Class.id.in_(class_ids)))
+        class_names = {c.id: c.name for c in classes_result.all()}
+
+    # Fetch all notes for these students in one query
+    notes_result = await db.exec(
+        select(ParentNote).where(
+            ParentNote.student_id.in_(student_ids)
+        ).order_by(ParentNote.created_at.desc())
+    )
+    notes_by_student: dict[str, list] = {}
+    for note in notes_result.all():
+        notes_by_student.setdefault(note.student_id, []).append(note)
 
     students = []
-    for profile, student in rows:
-        notes_result = await db.exec(
-            select(ParentNote).where(
-                ParentNote.student_id == profile.student_id
-            ).order_by(ParentNote.created_at.desc())
-        )
-        notes = notes_result.all()
-
+    for student in all_students:
+        profile = profiles_by_student[student.id]
+        notes = notes_by_student.get(student.id, [])
         students.append({
             "id": student.id,
             "name": f"{student.first_name} {student.last_name}",
-            "class": student.current_class_id,
+            "class": class_names.get(student.class_id, ""),
             "gender": student.gender,
             "pickup_method": profile.pickup_method,
             "transport_route_id": profile.transport_route_id,
@@ -518,7 +667,18 @@ async def get_student_security_status(
     )
     profile = profile_result.first()
     if not profile:
-        raise HTTPException(status_code=404, detail="Security profile not found")
+        # Auto-create a default profile so the parent portal never errors on first load
+        student_result = await db.exec(select(Student).where(Student.id == student_id))
+        student = student_result.first()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+        profile = StudentSecurityProfile(
+            student_id=student_id,
+            school_id=str(student.school_id),
+        )
+        db.add(profile)
+        await db.commit()
+        await db.refresh(profile)
 
     notes_result = await db.exec(
         select(ParentNote).where(
@@ -838,7 +998,7 @@ async def get_admin_overview(
     rows = students_result.all()
 
     # Build class name lookup to avoid N+1 queries
-    class_ids = {student.current_class_id for _, student in rows if student.current_class_id}
+    class_ids = {student.class_id for _, student in rows if student.class_id}
     class_names: dict[str, str] = {}
     if class_ids:
         classes_result = await db.exec(select(Class).where(Class.id.in_(class_ids)))
@@ -867,7 +1027,7 @@ async def get_admin_overview(
         student_data.append({
             "id": student.id,
             "name": f"{student.first_name} {student.last_name}",
-            "class": class_names.get(student.current_class_id, student.current_class_id),
+            "class": class_names.get(student.class_id, student.class_id),
             "gender": student.gender,
             "pickup_method": profile.pickup_method,
             "transport_route_id": profile.transport_route_id,

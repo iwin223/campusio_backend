@@ -73,6 +73,10 @@ from models.otp import (
     OTP, OTPBase, OTPSettings, OTPVerificationRequest, OTPVerificationResponse,
     OTPAdminSettings
 )
+from models.payment import (
+    OnlineTransaction, OnlineTransactionRead, PaymentVerification,
+    TransactionStatus, PaymentGateway, TransactionType
+)
 
 __all__ = [
     "User", "UserCreate", "UserLogin", "UserResponse", "UserRole",
@@ -134,6 +138,9 @@ __all__ = [
     # OTP Module
     "OTP", "OTPBase", "OTPSettings", "OTPVerificationRequest", "OTPVerificationResponse",
     "OTPAdminSettings",
+    # Online Payment Module
+    "OnlineTransaction", "OnlineTransactionRead", "PaymentVerification",
+    "TransactionStatus", "PaymentGateway", "TransactionType",
     # Security Module
     "StudentSecurityProfile", "StudentSecurityProfileCreate", "StudentSecurityProfileUpdate",
     "DailyQRToken", "SecurityScanLog", "ArrivalEvent", "ParentNote", "ParentNoteCreate",

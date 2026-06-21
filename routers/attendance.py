@@ -181,6 +181,7 @@ async def get_class_attendance(
         
         records.append({
             "student_id": student.id,
+            "attendance_id": att.id if att else None,
             "student_name": f"{student.first_name} {student.last_name}",
             "photo_url": student.photo_url,
             "status": status,

@@ -47,6 +47,17 @@ class OTPVerificationResponse(SQLModel):
     user: dict
 
 
+class OTPSettingsUpdateRequest(SQLModel):
+    """Request body for a user updating their own OTP settings"""
+    is_enabled: bool
+    method: str = "sms"
+
+
+class OTPResendRequest(SQLModel):
+    """Request body for resending an OTP code"""
+    email: str
+
+
 class OTPAdminSettings(SQLModel, table=True):
     """Store school-wide OTP configuration set by admins"""
     __tablename__ = "otp_admin_settings"

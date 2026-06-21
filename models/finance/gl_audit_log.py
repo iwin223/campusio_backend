@@ -25,6 +25,7 @@ class AuditActionType(str, Enum):
     
     # Journal Entry changes
     ENTRY_CREATED = "entry_created"
+    ENTRY_UPDATED = "entry_updated"
     ENTRY_POSTED = "entry_posted"
     ENTRY_REVERSED = "entry_reversed"
     ENTRY_DELETED = "entry_deleted"
@@ -32,10 +33,12 @@ class AuditActionType(str, Enum):
     
     # Expense changes
     EXPENSE_CREATED = "expense_created"
+    EXPENSE_UPDATED = "expense_updated"
     EXPENSE_SUBMITTED = "expense_submitted"
     EXPENSE_APPROVED = "expense_approved"
     EXPENSE_POSTED = "expense_posted"
     EXPENSE_REJECTED = "expense_rejected"
+    EXPENSE_PAYMENT_RECORDED = "expense_payment_recorded"
     
     # Period changes
     PERIOD_CREATED = "period_created"

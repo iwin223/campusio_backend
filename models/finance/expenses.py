@@ -4,6 +4,7 @@ Tracks all school expenses (utilities, supplies, maintenance, etc.)
 with approval workflow and GL account mapping.
 """
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Enum as SQLEnum, Column
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -84,7 +85,15 @@ class Expense(SQLModel, table=True):
     fiscal_period_id: Optional[str] = None  # Link to fiscal period ⭐ NEW
     
     # Payment tracking
-    payment_status: PaymentStatus = Field(default=PaymentStatus.OUTSTANDING, index=True)
+    # Distinct Postgres type name — models/fee.py defines its own, differently-valued
+    # PaymentStatus enum that would otherwise collide on the default "paymentstatus" type name.
+    payment_status: PaymentStatus = Field(
+        default=PaymentStatus.OUTSTANDING,
+        sa_column=Column(
+            SQLEnum(PaymentStatus, name="expense_payment_status", values_callable=lambda x: [e.value for e in x]),
+            index=True
+        )
+    )
     amount_paid: float = Field(default=0.0, ge=0.0)
     payment_date: Optional[datetime] = None
     paid_by: Optional[str] = None

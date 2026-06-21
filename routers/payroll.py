@@ -21,7 +21,7 @@ import io
 from models.payroll import (
     PayrollContract, PayrollContractCreate, PayrollContractUpdate,
     PayrollRun, PayrollRunCreate, PayrollLineItem, PayrollAdjustment,
-    PayrollAdjustmentCreate, PayrollStatus, PayslipResponse
+    PayrollAdjustmentCreate, PayrollStatus, PayslipResponse, PayrollRunActionRequest
 )
 from models.staff import Staff, StaffStatus
 from models.user import User, UserRole
@@ -544,7 +544,7 @@ async def get_payroll_run(
 @router.post("/runs/{run_id}/approve", response_model=dict)
 async def approve_payroll_run(
     run_id: str,
-    notes: Optional[str] = None,
+    data: PayrollRunActionRequest = PayrollRunActionRequest(),
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
@@ -552,18 +552,44 @@ async def approve_payroll_run(
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=400, detail="No school context")
-    
+
     service = PayrollService(session)
     result = await service.approve_payroll_run(
         school_id=school_id,
         payroll_run_id=run_id,
         current_user=current_user,
-        notes=notes
+        notes=data.notes
     )
-    
+
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
-    
+
+    return result
+
+
+@router.post("/runs/{run_id}/reject", response_model=dict)
+async def reject_payroll_run(
+    run_id: str,
+    data: PayrollRunActionRequest = PayrollRunActionRequest(),
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Reject payroll run, sending it back for revision (SUPER_ADMIN and SCHOOL_ADMIN only)"""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=400, detail="No school context")
+
+    service = PayrollService(session)
+    result = await service.reject_payroll_run(
+        school_id=school_id,
+        payroll_run_id=run_id,
+        current_user=current_user,
+        notes=data.notes
+    )
+
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+
     return result
 
 

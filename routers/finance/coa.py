@@ -10,6 +10,7 @@ SCHOOL SCOPING:
 - All endpoints enforce school_id scoping for multi-tenancy
 - SUPER_ADMIN can access any school; others limited to their school_id
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
@@ -22,13 +23,43 @@ from models.finance import (
     AccountType,
     AccountCategory,
 )
+from models.finance.gl_audit_log import AuditActionType, AuditEntityType
 from models.user import User, UserRole
 from database import get_session
 from auth import get_current_user, require_roles
 from services.coa_service import CoaService, CoaServiceError
 from services.coa_initialization import validate_school_chart_of_accounts
+from services.gl_audit_log_service import GLAuditLogService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chart-of-accounts", tags=["Finance - Chart of Accounts"])
+
+
+async def _log_gl_audit(
+    session: AsyncSession,
+    school_id: str,
+    entity_id: str,
+    action: AuditActionType,
+    current_user: User,
+    old_values: Optional[dict] = None,
+    new_values: Optional[dict] = None,
+) -> None:
+    """Best-effort GL audit log write — never blocks the actual mutation if it fails."""
+    try:
+        await GLAuditLogService(session).log_action(
+            school_id=school_id,
+            entity_type=AuditEntityType.GL_ACCOUNT,
+            entity_id=entity_id,
+            action=action,
+            user_id=current_user.id,
+            user_name=f"{current_user.first_name} {current_user.last_name}",
+            user_role=current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
+            old_values=old_values,
+            new_values=new_values,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write GL audit log for account {entity_id}: {e}")
 
 
 # ==================== Account Creation ====================
@@ -72,6 +103,11 @@ async def create_account(
             school_id=school_id,
             account_data=account_data,
             created_by=current_user.id,
+        )
+        await _log_gl_audit(
+            session, school_id, account.id, AuditActionType.ACCOUNT_CREATED, current_user,
+            new_values={"account_code": account.account_code, "account_name": account.account_name,
+                        "account_type": account.account_type.value if hasattr(account.account_type, "value") else account.account_type},
         )
         return GLAccountResponse.model_validate(account)
     except CoaServiceError as e:
@@ -361,7 +397,7 @@ async def update_account(
         )
     
     service = CoaService(session)
-    
+
     # Verify account exists
     account = await service.get_account_by_id(school_id, account_id)
     if not account:
@@ -369,12 +405,20 @@ async def update_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Account {account_id} not found"
         )
-    
+
+    old_values = update_data.model_dump(exclude_unset=True, exclude_none=True)
+    old_values = {k: getattr(account, k, None) for k in old_values.keys()}
+
     try:
         updated_account = await service.update_account(
             school_id=school_id,
             account_id=account_id,
             update_data=update_data,
+        )
+        await _log_gl_audit(
+            session, school_id, account_id, AuditActionType.ACCOUNT_UPDATED, current_user,
+            old_values=old_values,
+            new_values=update_data.model_dump(exclude_unset=True),
         )
         return GLAccountResponse.model_validate(updated_account)
     except Exception as e:
@@ -425,7 +469,13 @@ async def deactivate_account(
         )
     
     updated_account = await service.deactivate_account(school_id, account_id)
-    
+
+    await _log_gl_audit(
+        session, school_id, account_id, AuditActionType.ACCOUNT_DEACTIVATED, current_user,
+        old_values={"is_active": True},
+        new_values={"account_code": account.account_code, "is_active": False},
+    )
+
     return {
         "message": f"Account {account.account_code} deactivated",
         "account_id": account_id,
