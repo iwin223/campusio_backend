@@ -15,6 +15,17 @@ from models.finance.chart_of_accounts import (
 
 logger = logging.getLogger(__name__)
 
+# Standard accounting normal-balance rule by account type. Contra accounts (e.g. Accumulated
+# Depreciation, an ASSET that normally carries a credit balance) override this via an explicit
+# normal_balance on the request — this is just the default when none is given.
+DEFAULT_NORMAL_BALANCE_BY_TYPE = {
+    AccountType.ASSET: "debit",
+    AccountType.EXPENSE: "debit",
+    AccountType.LIABILITY: "credit",
+    AccountType.EQUITY: "credit",
+    AccountType.REVENUE: "credit",
+}
+
 
 class CoaServiceError(Exception):
     """Base exception for Chart of Accounts service errors"""
@@ -74,6 +85,8 @@ class CoaService:
             if not parent:
                 raise CoaServiceError(f"Parent account '{account_data.parent_account_id}' not found")
         
+        normal_balance = account_data.normal_balance or DEFAULT_NORMAL_BALANCE_BY_TYPE[account_data.account_type]
+
         # Create new account
         account = GLAccount(
             school_id=school_id,
@@ -82,7 +95,7 @@ class CoaService:
             account_type=account_data.account_type,
             account_category=account_data.account_category,
             description=account_data.description,
-            normal_balance=account_data.normal_balance,
+            normal_balance=normal_balance,
             parent_account_id=account_data.parent_account_id,
             created_by=created_by,
             is_active=True,

@@ -108,7 +108,9 @@ class GLAccountCreate(SQLModel):
     account_type: AccountType
     account_category: AccountCategory
     description: Optional[str] = None
-    normal_balance: str = "debit"
+    # None means "derive from account_type" (see CoaService.create_account) — only set this
+    # explicitly for contra accounts (e.g. Accumulated Depreciation, an ASSET with a credit balance).
+    normal_balance: Optional[str] = None
     parent_account_id: Optional[str] = None
 
 

@@ -1,4 +1,5 @@
 """Schools router"""
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +9,10 @@ from models.school import School, SchoolCreate, SchoolUpdate, SchoolType, Academ
 from models.user import User, UserRole
 from database import get_session
 from auth import get_current_user, require_roles
+from services.coa_initialization import seed_default_chart_of_accounts
+from services.fiscal_period_initialization import seed_default_fiscal_periods
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/schools", tags=["Schools"])
 
@@ -27,8 +32,10 @@ async def create_school(
     session.add(school)
     await session.commit()
     await session.refresh(school)
-    
-    return {
+
+    # Capture the response before seeding — seed_default_chart_of_accounts commits once per
+    # account, which expires this ORM object's attributes and would otherwise force a refetch.
+    response = {
         "id": school.id,
         "name": school.name,
         "code": school.code,
@@ -43,6 +50,26 @@ async def create_school(
         "is_active": school.is_active,
         "created_at": school.created_at.isoformat()
     }
+
+    # Best-effort: a missing/partial Chart of Accounts shouldn't block school creation,
+    # but without it the Finance module has nothing to post fee payments against.
+    try:
+        seed_result = await seed_default_chart_of_accounts(session, response["id"], created_by=current_user.id)
+        if not seed_result["success"]:
+            logger.warning(f"CoA seeding had failures for new school {response['id']}: {seed_result['errors']}")
+    except Exception as e:
+        logger.error(f"Failed to seed default Chart of Accounts for new school {response['id']}: {e}")
+
+    # Best-effort: without an open fiscal period, postings have nowhere to land until
+    # a school_admin manually creates one via the Fiscal Periods tab.
+    try:
+        period_result = await seed_default_fiscal_periods(session, response["id"], created_by=current_user.id)
+        if not period_result["success"]:
+            logger.warning(f"Fiscal period seeding had failures for new school {response['id']}: {period_result['errors']}")
+    except Exception as e:
+        logger.error(f"Failed to seed default fiscal periods for new school {response['id']}: {e}")
+
+    return response
 
 
 @router.get("/terms/list", response_model=dict)
