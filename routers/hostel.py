@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.encoders import jsonable_encoder
 from sqlmodel import select, func, and_
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from typing import Optional, List
@@ -141,24 +142,93 @@ async def update_hostel(
     return {**jsonable_encoder(hostel), "status": hostel.status.value}
 
 
-@router.delete("/hostels/{hostel_id}", response_model=dict)
-async def delete_hostel(
+HOSTEL_CASCADE_TABLES = [
+    ("rooms", "rooms"),
+    ("student_hostels", "student accommodations"),
+    ("room_allocations", "room allocations"),
+    ("hostel_attendance", "attendance records"),
+    ("hostel_maintenance", "maintenance records"),
+    ("hostel_visitors", "visitor logs"),
+    ("hostel_complaints", "complaints"),
+]
+
+HOSTEL_PRESERVED_TABLES = [
+    ("hostel_fees", "hostel fee records"),
+    ("hostel_fee_structures", "hostel fee structures"),
+]
+
+
+@router.get("/hostels/{hostel_id}/delete-impact", response_model=dict)
+async def get_hostel_delete_impact(
     hostel_id: str,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Delete a hostel"""
+    """Preview what deleting this hostel would affect, before actually deleting it."""
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
-    
+
     result = await session.execute(
         select(Hostel).where(and_(Hostel.id == hostel_id, Hostel.school_id == school_id))
     )
     hostel = result.scalar_one_or_none()
     if not hostel:
         raise HTTPException(status_code=404, detail="Hostel not found")
-    
+
+    will_be_deleted = {}
+    for table, label in HOSTEL_CASCADE_TABLES:
+        count_result = await session.execute(
+            text(f"SELECT count(*) FROM {table} WHERE hostel_id = :hid"),
+            {"hid": hostel_id}
+        )
+        count = count_result.scalar()
+        if count:
+            will_be_deleted[label] = count
+
+    will_be_preserved = {}
+    for table, label in HOSTEL_PRESERVED_TABLES:
+        count_result = await session.execute(
+            text(f"SELECT count(*) FROM {table} WHERE hostel_id = :hid"),
+            {"hid": hostel_id}
+        )
+        count = count_result.scalar()
+        if count:
+            will_be_preserved[label] = count
+
+    return {
+        "hostel_id": hostel_id,
+        "will_be_deleted": will_be_deleted,
+        "total_to_be_deleted": sum(will_be_deleted.values()),
+        "will_be_preserved": will_be_preserved,
+    }
+
+
+@router.delete("/hostels/{hostel_id}", response_model=dict)
+async def delete_hostel(
+    hostel_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Delete a hostel.
+
+    Occupancy/operational records (rooms, accommodations, allocations, attendance,
+    maintenance, visitors, complaints) are permanently deleted along with it via
+    DB-level CASCADE. Financial records (hostel fees, fee structures) are never
+    deleted — preserved with their hostel reference cleared via DB-level SET NULL.
+    Call GET .../delete-impact first to show the user what this will affect.
+    """
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+
+    result = await session.execute(
+        select(Hostel).where(and_(Hostel.id == hostel_id, Hostel.school_id == school_id))
+    )
+    hostel = result.scalar_one_or_none()
+    if not hostel:
+        raise HTTPException(status_code=404, detail="Hostel not found")
+
     await session.delete(hostel)
     await session.commit()
     
@@ -297,27 +367,81 @@ async def update_room(
     }
 
 
+ROOM_CASCADE_TABLES = [
+    ("room_allocations", "room allocations"),
+]
+
+ROOM_PRESERVED_TABLES = [
+    ("student_hostels", "student accommodations (will lose this specific room assignment)"),
+    ("hostel_maintenance", "maintenance records"),
+    ("hostel_complaints", "complaints"),
+]
+
+
+@router.get("/rooms/{room_id}/delete-impact", response_model=dict)
+async def get_room_delete_impact(
+    room_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Preview what deleting this room would affect, before actually deleting it."""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+
+    result = await session.execute(
+        select(Room).where(and_(Room.id == room_id, Room.school_id == school_id))
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    will_be_deleted = {}
+    for table, label in ROOM_CASCADE_TABLES:
+        count = (await session.execute(text(f"SELECT count(*) FROM {table} WHERE room_id = :rid"), {"rid": room_id})).scalar()
+        if count:
+            will_be_deleted[label] = count
+
+    will_be_preserved = {}
+    for table, label in ROOM_PRESERVED_TABLES:
+        count = (await session.execute(text(f"SELECT count(*) FROM {table} WHERE room_id = :rid"), {"rid": room_id})).scalar()
+        if count:
+            will_be_preserved[label] = count
+
+    return {
+        "room_id": room_id,
+        "will_be_deleted": will_be_deleted,
+        "total_to_be_deleted": sum(will_be_deleted.values()),
+        "will_be_preserved": will_be_preserved,
+    }
+
+
 @router.delete("/rooms/{room_id}", response_model=dict)
 async def delete_room(
     room_id: str,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Delete a room"""
+    """Delete a room.
+
+    Room allocations tied to this room are permanently deleted via DB-level
+    CASCADE. Student accommodations, maintenance records, and complaints
+    referencing this room are never deleted — preserved with their room
+    reference cleared via DB-level SET NULL.
+    """
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
-    
+
     result = await session.execute(
         select(Room).where(and_(Room.id == room_id, Room.school_id == school_id))
     )
     room = result.scalar_one_or_none()
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
-    
+
     await session.delete(room)
     await session.commit()
-    
+
     return {"message": "Room deleted successfully", "id": room_id}
 
 

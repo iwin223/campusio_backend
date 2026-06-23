@@ -1,5 +1,6 @@
 """Hostel Management Models"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -122,7 +123,7 @@ class Room(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    hostel_id: str = Field(index=True)
+    hostel_id: str = Field(sa_column=Column(String, ForeignKey("hostels.id", ondelete="CASCADE"), index=True))
     room_number: str = Field(index=True)
     room_type: RoomType
     capacity: int
@@ -177,9 +178,12 @@ class StudentHostel(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
     student_id: str = Field(unique=True, index=True)
-    hostel_id: str = Field(index=True)
-    room_id: Optional[str] = Field(default=None, index=True)
-    
+    hostel_id: str = Field(sa_column=Column(String, ForeignKey("hostels.id", ondelete="CASCADE"), index=True))
+    room_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("rooms.id", ondelete="SET NULL"), index=True)
+    )
+
     # Enrollment details
     check_in_date: str
     check_out_date: Optional[str] = None
@@ -225,9 +229,9 @@ class RoomAllocation(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
-    room_id: str = Field(index=True)
-    hostel_id: str = Field(index=True)
-    
+    room_id: str = Field(sa_column=Column(String, ForeignKey("rooms.id", ondelete="CASCADE"), index=True))
+    hostel_id: str = Field(sa_column=Column(String, ForeignKey("hostels.id", ondelete="CASCADE"), index=True))
+
     allocation_date: str
     deallocation_date: Optional[str] = None
     bed_number: Optional[str] = None
@@ -254,8 +258,8 @@ class HostelAttendance(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
-    hostel_id: str = Field(index=True)
-    
+    hostel_id: str = Field(sa_column=Column(String, ForeignKey("hostels.id", ondelete="CASCADE"), index=True))
+
     attendance_date: str
     check_in_time: Optional[str] = None
     check_out_time: Optional[str] = None
@@ -282,10 +286,16 @@ class HostelFee(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
-    hostel_id: str = Field(index=True)
-    academic_term_id: Optional[str] = Field(default=None, index=True)
+    hostel_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("hostels.id", ondelete="SET NULL"), index=True)
+    )
+    academic_term_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="SET NULL"), index=True)
+    )
     fee_structure_id: Optional[str] = Field(default=None, index=True)
-    
+
     fee_type: HostelFeeType
     amount_due: float
     amount_paid: float = 0.0
@@ -340,8 +350,14 @@ class HostelFeeStructure(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    hostel_id: str = Field(index=True)
-    academic_term_id: Optional[str] = Field(default=None, index=True)
+    hostel_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("hostels.id", ondelete="SET NULL"), index=True)
+    )
+    academic_term_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="SET NULL"), index=True)
+    )
     
     fee_type: HostelFeeType  # MONTHLY, TERM, ANNUAL, SEMESTER
     amount: float
@@ -384,9 +400,12 @@ class HostelMaintenance(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    hostel_id: str = Field(index=True)
-    room_id: Optional[str] = Field(default=None, index=True)
-    
+    hostel_id: str = Field(sa_column=Column(String, ForeignKey("hostels.id", ondelete="CASCADE"), index=True))
+    room_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("rooms.id", ondelete="SET NULL"), index=True)
+    )
+
     maintenance_date: str
     maintenance_type: str  # e.g., "Cleaning", "Repair", "Inspection"
     description: str
@@ -414,9 +433,9 @@ class HostelVisitor(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    hostel_id: str = Field(index=True)
+    hostel_id: str = Field(sa_column=Column(String, ForeignKey("hostels.id", ondelete="CASCADE"), index=True))
     student_id: str = Field(index=True)
-    
+
     visitor_name: str
     visitor_phone: Optional[str] = None
     relationship: str  # Parent, Guardian, Friend, etc.
@@ -447,10 +466,13 @@ class HostelComplaint(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    hostel_id: str = Field(index=True)
+    hostel_id: str = Field(sa_column=Column(String, ForeignKey("hostels.id", ondelete="CASCADE"), index=True))
     student_id: str = Field(index=True)
-    room_id: Optional[str] = Field(default=None, index=True)
-    
+    room_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("rooms.id", ondelete="SET NULL"), index=True)
+    )
+
     complaint_type: str  # Maintenance, Noise, Cleanliness, etc.
     title: str
     description: str

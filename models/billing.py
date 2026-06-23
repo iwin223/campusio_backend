@@ -1,5 +1,6 @@
 """Platform subscription billing models"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from typing import Optional
 from datetime import datetime
 from enum import Enum
@@ -20,7 +21,7 @@ class PlatformSubscription(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    academic_term_id: str = Field(index=True)
+    academic_term_id: Optional[str] = Field(default=None, sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="SET NULL"), index=True))
     
     # Billing snapshot at generation time
     student_count: int  # Active students at billing time

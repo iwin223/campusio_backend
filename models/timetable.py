@@ -1,5 +1,6 @@
 """Timetable and Period models"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from typing import Optional
 from datetime import datetime
 from enum import Enum
@@ -53,7 +54,7 @@ class Timetable(SQLModel, table=True):
     teacher_id: str = Field(index=True)
     period_id: str = Field(index=True)
     day_of_week: DayOfWeek
-    academic_term_id: str = Field(index=True)
+    academic_term_id: str = Field(sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="CASCADE"), index=True))
     room: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

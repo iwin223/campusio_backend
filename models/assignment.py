@@ -1,5 +1,6 @@
 """Assignment, Submission, and Learning Materials models for Teacher Portal"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from sqlalchemy import Index, Column
 from sqlalchemy.types import Enum as SQLEnum
 from typing import Optional, List
@@ -86,7 +87,7 @@ class Assignment(SQLModel, table=True):
     teacher_id: str = Field(index=True)  # Staff.id
     class_id: str = Field(index=True)
     subject_id: str = Field(index=True)
-    academic_term_id: str = Field(index=True)
+    academic_term_id: str = Field(sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="CASCADE"), index=True))
     
     # Assignment content
     title: str
@@ -351,7 +352,7 @@ class LearningMaterial(SQLModel, table=True):
     teacher_id: str = Field(index=True)
     class_id: str = Field(index=True)
     subject_id: str = Field(index=True)
-    academic_term_id: str = Field(index=True)
+    academic_term_id: str = Field(sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="CASCADE"), index=True))
     
     # Content
     title: str

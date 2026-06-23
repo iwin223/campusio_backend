@@ -1,5 +1,6 @@
 """Attendance models"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from typing import Optional
 from datetime import datetime
 from enum import Enum
@@ -20,7 +21,7 @@ class Attendance(SQLModel, table=True):
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
     class_id: str = Field(index=True)
-    academic_term_id: str = Field(index=True)
+    academic_term_id: str = Field(sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="CASCADE"), index=True))
     attendance_date: str = Field(index=True)
     status: AttendanceStatus
     remarks: Optional[str] = None

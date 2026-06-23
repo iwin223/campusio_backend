@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.encoders import jsonable_encoder
 from sqlmodel import select, func, and_
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
@@ -184,17 +185,59 @@ async def update_vehicle(
     }
 
 
+@router.get("/vehicles/{vehicle_id}/delete-impact", response_model=dict)
+async def get_vehicle_delete_impact(
+    vehicle_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Preview what deleting this vehicle would affect, before actually deleting it."""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+
+    result = await session.execute(
+        select(Vehicle).where(and_(Vehicle.id == vehicle_id, Vehicle.school_id == school_id))
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    will_be_deleted = {}
+    for table, label in [("vehicle_maintenance", "maintenance records"), ("transport_attendance", "attendance records")]:
+        col = "vehicle_id"
+        count = (await session.execute(text(f"SELECT count(*) FROM {table} WHERE {col} = :vid"), {"vid": vehicle_id})).scalar()
+        if count:
+            will_be_deleted[label] = count
+
+    will_be_preserved = {}
+    count = (await session.execute(text("SELECT count(*) FROM routes WHERE vehicle_id = :vid"), {"vid": vehicle_id})).scalar()
+    if count:
+        will_be_preserved["routes (will lose their assigned vehicle)"] = count
+
+    return {
+        "vehicle_id": vehicle_id,
+        "will_be_deleted": will_be_deleted,
+        "total_to_be_deleted": sum(will_be_deleted.values()),
+        "will_be_preserved": will_be_preserved,
+    }
+
+
 @router.delete("/vehicles/{vehicle_id}", status_code=204)
 async def delete_vehicle(
     vehicle_id: str,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Delete a vehicle"""
+    """Delete a vehicle.
+
+    Maintenance and attendance records tied to this vehicle are permanently
+    deleted via DB-level CASCADE. Routes that had it assigned just lose the
+    assignment (SET NULL) — the route itself isn't touched.
+    """
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
-    
+
     result = await session.execute(
         select(Vehicle).where(
             and_(Vehicle.id == vehicle_id, Vehicle.school_id == school_id)
@@ -203,7 +246,7 @@ async def delete_vehicle(
     vehicle = result.scalar_one_or_none()
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
-    
+
     await session.delete(vehicle)
     await session.commit()
 
@@ -442,17 +485,74 @@ async def update_route(
     }
 
 
+ROUTE_CASCADE_TABLES = [
+    ("student_transport", "student enrollments"),
+    ("transport_attendance", "attendance records"),
+    ("live_bus_locations", "live location pings"),
+]
+
+ROUTE_PRESERVED_TABLES = [
+    ("daily_qr_tokens", "daily QR tokens"),
+    ("student_security_profiles", "student pickup/safety profiles"),
+    ("transport_fees", "transport fee records"),
+]
+
+
+@router.get("/routes/{route_id}/delete-impact", response_model=dict)
+async def get_route_delete_impact(
+    route_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Preview what deleting this route would affect, before actually deleting it."""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+
+    result = await session.execute(
+        select(Route).where(and_(Route.id == route_id, Route.school_id == school_id))
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Route not found")
+
+    will_be_deleted = {}
+    for table, label in ROUTE_CASCADE_TABLES:
+        count = (await session.execute(text(f"SELECT count(*) FROM {table} WHERE route_id = :rid"), {"rid": route_id})).scalar()
+        if count:
+            will_be_deleted[label] = count
+
+    will_be_preserved = {}
+    for table, label in ROUTE_PRESERVED_TABLES:
+        col = "transport_route_id" if table == "student_security_profiles" else "route_id"
+        count = (await session.execute(text(f"SELECT count(*) FROM {table} WHERE {col} = :rid"), {"rid": route_id})).scalar()
+        if count:
+            will_be_preserved[label] = count
+
+    return {
+        "route_id": route_id,
+        "will_be_deleted": will_be_deleted,
+        "total_to_be_deleted": sum(will_be_deleted.values()),
+        "will_be_preserved": will_be_preserved,
+    }
+
+
 @router.delete("/routes/{route_id}", status_code=204)
 async def delete_route(
     route_id: str,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Delete a route"""
+    """Delete a route.
+
+    Student enrollments, attendance, and live-location pings tied to this route
+    are permanently deleted via DB-level CASCADE. QR tokens, student safety
+    profiles, and transport fees are never deleted — preserved with their route
+    reference cleared via DB-level SET NULL.
+    """
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
-    
+
     result = await session.execute(
         select(Route).where(
             and_(Route.id == route_id, Route.school_id == school_id)
@@ -461,7 +561,7 @@ async def delete_route(
     route = result.scalar_one_or_none()
     if not route:
         raise HTTPException(status_code=404, detail="Route not found")
-    
+
     await session.delete(route)
     await session.commit()
 
@@ -1336,17 +1436,59 @@ async def verify_driver(
     return jsonable_encoder(driver)
 
 
+@router.get("/drivers/{driver_id}/delete-impact", response_model=dict)
+async def get_driver_delete_impact(
+    driver_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Preview what deleting this driver would affect, before actually deleting it."""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+
+    result = await session.execute(
+        select(DriverStaff).where(and_(DriverStaff.id == driver_id, DriverStaff.school_id == school_id))
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    will_be_deleted = {}
+    count = (await session.execute(text("SELECT count(*) FROM live_bus_locations WHERE driver_id = :did"), {"did": driver_id})).scalar()
+    if count:
+        will_be_deleted["live location pings"] = count
+
+    will_be_preserved = {}
+    count = (await session.execute(
+        text("SELECT count(*) FROM vehicles WHERE driver_id = :did OR conductor_id = :did"), {"did": driver_id}
+    )).scalar()
+    if count:
+        will_be_preserved["vehicles (will lose this driver/conductor assignment)"] = count
+
+    return {
+        "driver_id": driver_id,
+        "will_be_deleted": will_be_deleted,
+        "total_to_be_deleted": sum(will_be_deleted.values()),
+        "will_be_preserved": will_be_preserved,
+    }
+
+
 @router.delete("/drivers/{driver_id}", status_code=204)
 async def delete_driver(
     driver_id: str,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Delete a driver"""
+    """Delete a driver.
+
+    Live location pings tied to this driver are permanently deleted via DB-level
+    CASCADE. Vehicles that had them assigned as driver/conductor just lose that
+    assignment (SET NULL) — the vehicle itself isn't touched.
+    """
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
-    
+
     result = await session.execute(
         select(DriverStaff).where(
             and_(DriverStaff.id == driver_id, DriverStaff.school_id == school_id)
@@ -1355,10 +1497,10 @@ async def delete_driver(
     driver = result.scalar_one_or_none()
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
-    
+
     await session.delete(driver)
     await session.commit()
-    
+
     logger.info(f"Deleted driver {driver_id}")
 
 

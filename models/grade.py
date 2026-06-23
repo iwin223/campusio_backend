@@ -1,5 +1,6 @@
 """Grade and Report Card models"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from typing import Optional
 from datetime import datetime
 from enum import Enum
@@ -23,7 +24,7 @@ class Grade(SQLModel, table=True):
     student_id: str = Field(index=True)
     class_id: str = Field(index=True)
     subject_id: str = Field(index=True)
-    academic_term_id: str = Field(index=True)
+    academic_term_id: str = Field(sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="CASCADE"), index=True))
     assessment_type: AssessmentType
     score: float
     max_score: float
@@ -65,7 +66,7 @@ class ReportCard(SQLModel, table=True):
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
     class_id: str = Field(index=True)
-    academic_term_id: str = Field(index=True)
+    academic_term_id: str = Field(sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="CASCADE"), index=True))
     total_score: float
     average_score: float
     position: Optional[int] = None

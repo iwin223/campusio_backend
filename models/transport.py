@@ -1,5 +1,6 @@
 """Transport Management Models"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -54,9 +55,15 @@ class Vehicle(SQLModel, table=True):
     color: Optional[str] = None
     seating_capacity: int
     current_occupancy: int = 0
-    driver_id: Optional[str] = Field(default=None, index=True)
-    conductor_id: Optional[str] = Field(default=None, index=True)
-    
+    driver_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("driver_staff.id", ondelete="SET NULL"), index=True)
+    )
+    conductor_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("driver_staff.id", ondelete="SET NULL"), index=True)
+    )
+
     # Maintenance tracking
     last_service_date: Optional[str] = None
     next_service_date: Optional[str] = None
@@ -116,7 +123,10 @@ class Route(SQLModel, table=True):
     route_code: str = Field(unique=True, index=True)
     distance_km: float
     estimated_duration_minutes: int
-    vehicle_id: Optional[str] = Field(default=None, index=True)
+    vehicle_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("vehicles.id", ondelete="SET NULL"), index=True)
+    )
     
     # Schedule
     pickup_time: str  # HH:MM format
@@ -173,8 +183,8 @@ class StudentTransport(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
-    route_id: str = Field(index=True)
-    
+    route_id: str = Field(sa_column=Column(String, ForeignKey("routes.id", ondelete="CASCADE"), index=True))
+
     # Pickup and dropoff points
     pickup_point: Optional[str] = None
     dropoff_point: Optional[str] = None
@@ -217,10 +227,10 @@ class TransportAttendance(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    route_id: str = Field(index=True)
+    route_id: str = Field(sa_column=Column(String, ForeignKey("routes.id", ondelete="CASCADE"), index=True))
     student_id: str = Field(index=True)
-    vehicle_id: str = Field(index=True)
-    
+    vehicle_id: str = Field(sa_column=Column(String, ForeignKey("vehicles.id", ondelete="CASCADE"), index=True))
+
     attendance_date: str  # DATE format YYYY-MM-DD
     status: AttendanceStatus = AttendanceStatus.PRESENT
     
@@ -255,9 +265,15 @@ class TransportFee(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
-    route_id: str = Field(index=True)
-    academic_term_id: Optional[str] = Field(default=None, index=True)
-    
+    route_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("routes.id", ondelete="SET NULL"), index=True)
+    )
+    academic_term_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="SET NULL"), index=True)
+    )
+
     fee_type: TransportFeeType
     amount_due: float
     amount_paid: float = 0.0
@@ -313,8 +329,8 @@ class VehicleMaintenance(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    vehicle_id: str = Field(index=True)
-    
+    vehicle_id: str = Field(sa_column=Column(String, ForeignKey("vehicles.id", ondelete="CASCADE"), index=True))
+
     maintenance_date: str
     maintenance_type: str  # e.g., "Oil Change", "Tire Replacement", "Inspection"
     description: str

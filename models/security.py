@@ -1,5 +1,6 @@
 """Student Security Module Models"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from typing import Optional
 from datetime import datetime
 from enum import Enum
@@ -50,7 +51,10 @@ class StudentSecurityProfile(SQLModel, table=True):
     neighbourhood: Optional[str] = None
 
     pickup_method: str = Field(default="parent")  # "parent" | "transport"
-    transport_route_id: Optional[str] = None
+    transport_route_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("routes.id", ondelete="SET NULL"), index=True)
+    )
 
     authorized_pickup_name: Optional[str] = None
     authorized_pickup_phone: Optional[str] = None
@@ -105,7 +109,10 @@ class DailyQRToken(SQLModel, table=True):
     school_id: str = Field(index=True)
 
     student_id: Optional[str] = Field(default=None, index=True)
-    route_id: Optional[str] = Field(default=None, index=True)
+    route_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("routes.id", ondelete="SET NULL"), index=True)
+    )
 
     # Embedded collector session token — dormant until a successful scan activates it
     collector_session_token: str = Field(default_factory=lambda: str(uuid.uuid4()), unique=True)
@@ -187,8 +194,8 @@ class LiveBusLocation(SQLModel, table=True):
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    route_id: str = Field(index=True)
-    driver_id: str = Field(index=True)
+    route_id: str = Field(sa_column=Column(String, ForeignKey("routes.id", ondelete="CASCADE"), index=True))
+    driver_id: str = Field(sa_column=Column(String, ForeignKey("driver_staff.id", ondelete="CASCADE"), index=True))
 
     lat: float
     lng: float

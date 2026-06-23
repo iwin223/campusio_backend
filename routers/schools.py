@@ -2,6 +2,7 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
 from typing import Optional
@@ -432,6 +433,81 @@ async def update_academic_term(
     }
 
 
+# Tables that get permanently deleted (CASCADE) when an academic term is deleted.
+TERM_CASCADE_TABLES = [
+    ("assignments", "assignments"),
+    ("learning_materials", "learning materials"),
+    ("attendance", "attendance records"),
+    ("class_subjects", "class-subject assignments"),
+    ("grades", "grades"),
+    ("report_cards", "report cards"),
+    ("teacher_assignments", "teacher assignments"),
+    ("timetables", "timetable entries"),
+]
+
+# Tables that just get unlinked (SET NULL) — the records themselves are kept.
+TERM_PRESERVED_TABLES = [
+    ("classes", "classes"),
+    ("fees", "fee records"),
+    ("fee_structures", "fee structures"),
+    ("platform_subscriptions", "billing/subscription records"),
+]
+
+
+@router.get("/{school_id}/terms/{term_id}/delete-impact", response_model=dict)
+async def get_term_delete_impact(
+    school_id: str,
+    term_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Preview what deleting this academic term would affect, before actually deleting it.
+
+    Academic/operational data (grades, attendance, assignments, etc.) is permanently
+    deleted along with the term. Financial data (fees, billing records) is never deleted —
+    it's preserved with its term reference cleared.
+    """
+    if current_user.role == UserRole.SCHOOL_ADMIN and current_user.school_id != school_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    result = await session.execute(
+        select(AcademicTerm).where(
+            AcademicTerm.id == term_id,
+            AcademicTerm.school_id == school_id
+        )
+    )
+    term = result.scalar_one_or_none()
+    if not term:
+        raise HTTPException(status_code=404, detail="Term not found")
+
+    will_be_deleted = {}
+    for table, label in TERM_CASCADE_TABLES:
+        count_result = await session.execute(
+            text(f"SELECT count(*) FROM {table} WHERE academic_term_id = :tid"),
+            {"tid": term_id}
+        )
+        count = count_result.scalar()
+        if count:
+            will_be_deleted[label] = count
+
+    will_be_preserved = {}
+    for table, label in TERM_PRESERVED_TABLES:
+        count_result = await session.execute(
+            text(f"SELECT count(*) FROM {table} WHERE academic_term_id = :tid"),
+            {"tid": term_id}
+        )
+        count = count_result.scalar()
+        if count:
+            will_be_preserved[label] = count
+
+    return {
+        "term_id": term_id,
+        "will_be_deleted": will_be_deleted,
+        "total_to_be_deleted": sum(will_be_deleted.values()),
+        "will_be_preserved": will_be_preserved,
+    }
+
+
 # Academic Term Delete
 @router.delete("/{school_id}/terms/{term_id}", response_model=dict)
 async def delete_academic_term(
@@ -440,10 +516,18 @@ async def delete_academic_term(
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
-    """Delete an academic term"""
+    """Delete an academic term.
+
+    Academic/operational records tied to this term (grades, attendance, assignments,
+    report cards, timetables, teacher assignments, class-subject links) are permanently
+    deleted along with it via DB-level CASCADE. Financial records (fees, fee structures,
+    billing/subscription records) are never deleted — they're preserved with their term
+    reference cleared via DB-level SET NULL. Call GET .../delete-impact first to show the
+    user what this will affect before they confirm.
+    """
     if current_user.role == UserRole.SCHOOL_ADMIN and current_user.school_id != school_id:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
     result = await session.execute(
         select(AcademicTerm).where(
             AcademicTerm.id == term_id,
@@ -451,11 +535,11 @@ async def delete_academic_term(
         )
     )
     term = result.scalar_one_or_none()
-    
+
     if not term:
         raise HTTPException(status_code=404, detail="Term not found")
-    
+
     await session.delete(term)
     await session.commit()
-    
+
     return {"message": "Academic term deleted successfully"}

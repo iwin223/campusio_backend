@@ -1,5 +1,6 @@
 """Fee and Payment models"""
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, ForeignKey
 from typing import Optional
 from datetime import datetime
 from enum import Enum
@@ -37,7 +38,7 @@ class FeeStructure(SQLModel, table=True):
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
-    academic_term_id: str = Field(index=True)
+    academic_term_id: Optional[str] = Field(default=None, sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="SET NULL"), index=True))
     class_level: str
     fee_type: FeeType
     amount: float
@@ -63,7 +64,7 @@ class Fee(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True)
     student_id: str = Field(index=True)
-    academic_term_id: str = Field(index=True)
+    academic_term_id: Optional[str] = Field(default=None, sa_column=Column(String, ForeignKey("academic_terms.id", ondelete="SET NULL"), index=True))
     fee_structure_id: str = Field(index=True)
     amount_due: float
     amount_paid: float = 0
