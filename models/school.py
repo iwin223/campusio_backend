@@ -27,6 +27,9 @@ class School(SQLModel, table=True):
     logo_url: Optional[str] = None
     motto: Optional[str] = None
     is_active: bool = True
+    # Feature toggles — boarding is an SHS phenomenon, so the hostel module is
+    # OFF by default for new Basic/JHS schools and enabled per school when needed.
+    enable_hostel: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -54,6 +57,7 @@ class SchoolUpdate(SQLModel):
     logo_url: Optional[str] = None
     motto: Optional[str] = None
     is_active: Optional[bool] = None
+    enable_hostel: Optional[bool] = None
 
 
 class TermType(str, Enum):

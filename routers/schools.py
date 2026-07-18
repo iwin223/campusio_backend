@@ -49,6 +49,7 @@ async def create_school(
         "logo_url": school.logo_url,
         "motto": school.motto,
         "is_active": school.is_active,
+        "enable_hostel": school.enable_hostel,
         "created_at": school.created_at.isoformat()
     }
 
@@ -145,6 +146,7 @@ async def list_schools(
             "logo_url": s.logo_url,
             "motto": s.motto,
             "is_active": s.is_active,
+            "enable_hostel": s.enable_hostel,
             "created_at": s.created_at.isoformat()
         }
         for s in schools
@@ -180,6 +182,7 @@ async def get_school(
         "logo_url": school.logo_url,
         "motto": school.motto,
         "is_active": school.is_active,
+        "enable_hostel": school.enable_hostel,
         "created_at": school.created_at.isoformat()
     }
 
@@ -372,6 +375,7 @@ async def update_school(
         "logo_url": school.logo_url,
         "motto": school.motto,
         "is_active": school.is_active,
+        "enable_hostel": school.enable_hostel,
         "created_at": school.created_at.isoformat(),
         "updated_at": school.updated_at.isoformat()
     }
