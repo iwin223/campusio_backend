@@ -17,7 +17,8 @@ from models.billing import (
     PlatformSubscription, SubscriptionInvoice,
     PlatformSubscriptionResponse, SubscriptionInvoiceResponse,
     GenerateSubscriptionRequest, ProcessSubscriptionPaymentRequest,
-    SubscriptionMetrics
+    SubscriptionMetrics, BillingConfiguration, BillingPlan,
+    BillingConfigurationResponse
 )
 from typing import Optional
 from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification
@@ -38,6 +39,105 @@ def get_billing_service() -> PlatformBillingService:
     """
     paystack_secret_key = os.getenv("PAYSTACK_SECRET_KEY", "")
     return PlatformBillingService(paystack_secret_key)
+
+
+# ============================================================================
+# ENDPOINTS - PER-SCHOOL BILLING CONFIGURATION (super admin)
+# ============================================================================
+
+from sqlmodel import SQLModel
+
+
+class UpdateBillingConfigRequest(SQLModel):
+    """Super-admin request to override a school's billing configuration.
+
+    All fields optional — only supplied fields change. Used for pilot schools
+    (e.g. first term free via a 0 price) and negotiated discounts.
+    """
+    unit_price: Optional[float] = None          # GHS per student per term
+    monthly_unit_price: Optional[float] = None  # GHS per student per month
+    billing_plan: Optional[BillingPlan] = None  # termly | monthly
+
+
+def _config_response(config: BillingConfiguration) -> BillingConfigurationResponse:
+    return BillingConfigurationResponse(
+        school_id=config.school_id,
+        unit_price=config.unit_price,
+        monthly_unit_price=config.monthly_unit_price,
+        billing_plan=config.billing_plan if isinstance(config.billing_plan, str) else config.billing_plan.value,
+        grace_period_days=config.grace_period_days,
+        late_fee_percentage=config.late_fee_percentage,
+        enable_reminders=config.enable_reminders,
+        reminder_days_before_due=config.reminder_days_before_due,
+        enable_late_fees=config.enable_late_fees,
+        enable_bulk_discounts=config.enable_bulk_discounts,
+    )
+
+
+@router.get("/config/{school_id}", response_model=BillingConfigurationResponse)
+async def get_billing_config(
+    school_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get a school's billing configuration (super admin, or the school's own admin read-only)."""
+    if current_user.role not in (UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    if current_user.role == UserRole.SCHOOL_ADMIN and current_user.school_id != school_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    result = await session.execute(
+        select(BillingConfiguration).where(BillingConfiguration.school_id == school_id)
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        config = BillingConfiguration(school_id=school_id)
+        session.add(config)
+        await session.commit()
+        await session.refresh(config)
+    return _config_response(config)
+
+
+@router.put("/config/{school_id}", response_model=BillingConfigurationResponse)
+async def update_billing_config(
+    school_id: str,
+    request_data: UpdateBillingConfigRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Override a school's pricing/plan (super admin only)."""
+    if current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    result = await session.execute(
+        select(BillingConfiguration).where(BillingConfiguration.school_id == school_id)
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        config = BillingConfiguration(school_id=school_id)
+        session.add(config)
+
+    if request_data.unit_price is not None:
+        if request_data.unit_price < 0:
+            raise HTTPException(status_code=400, detail="unit_price cannot be negative")
+        config.unit_price = request_data.unit_price
+    if request_data.monthly_unit_price is not None:
+        if request_data.monthly_unit_price < 0:
+            raise HTTPException(status_code=400, detail="monthly_unit_price cannot be negative")
+        config.monthly_unit_price = request_data.monthly_unit_price
+    if request_data.billing_plan is not None:
+        config.billing_plan = request_data.billing_plan.value
+
+    config.updated_at = datetime.utcnow()
+    session.add(config)
+    await session.commit()
+    await session.refresh(config)
+
+    logger.info(
+        f"Billing config updated for school {school_id} by {current_user.id}: "
+        f"unit_price={config.unit_price}, monthly={config.monthly_unit_price}, plan={config.billing_plan}"
+    )
+    return _config_response(config)
 
 
 # ============================================================================
@@ -70,7 +170,7 @@ async def generate_term_subscription(
         "subscription_id": "sub-xxx",
         "invoice_id": "inv-xxx",
         "student_count": 420,
-        "total_due": 8400.00,
+        "total_due": 168000.00,
         "due_date": "2026-05-15T10:30:00"
     }
     ```
@@ -127,8 +227,8 @@ async def get_current_subscription(
         "school_id": "school-xxx",
         "academic_term_id": "term-xxx",
         "student_count": 420,
-        "unit_price": 20.00,
-        "total_amount_due": 8400.00,
+        "unit_price": 400.00,
+        "total_amount_due": 168000.00,
         "amount_paid": 0.00,
         "status": "pending",
         "billing_date": "2026-04-15T10:30:00",
@@ -394,7 +494,7 @@ async def initiate_subscription_payment(
     ```json
     {
         "subscription_id": "sub-xxx",
-        "amount_to_pay": 8400.00  // Optional, defaults to full amount
+        "amount_to_pay": 168000.00  // Optional, defaults to full amount
     }
     ```
     
@@ -405,7 +505,7 @@ async def initiate_subscription_payment(
         "transaction_id": "txn-xxx",
         "payment_url": "https://checkout.paystack.com/...",
         "reference": "PLAT-xxx",
-        "amount": 8400.00
+        "amount": 168000.00
     }
     ```
     """
@@ -472,7 +572,7 @@ async def get_subscription_payment_status(
     {
         "status": "pending|processing|success|failed",
         "message": "Payment status",
-        "amount": 8400.00,
+        "amount": 168000.00,
         "reference": "PLAT-xxx",
         "updated_at": "2026-04-16T10:30:00"
     }
@@ -586,11 +686,11 @@ async def get_subscription_metrics(
     {
         "school_id": "school-xxx",
         "current_term_status": "pending",
-        "total_due": 8400.00,
+        "total_due": 168000.00,
         "total_paid": 0.00,
-        "remaining_balance": 8400.00,
+        "remaining_balance": 168000.00,
         "student_count": 420,
-        "unit_price": 20.00,
+        "unit_price": 400.00,
         "days_until_due": 30,
         "is_overdue": false
     }
@@ -704,7 +804,7 @@ async def waive_late_fee(
     {
         "success": true,
         "waived_amount": 420.00,
-        "new_total_due": 8400.00
+        "new_total_due": 168000.00
     }
     ```
     """
@@ -1269,7 +1369,7 @@ async def get_aging_analysis(
             "current": {"count": 34, "amount": 285200.00, "percentage": 80.92},
             "1_30_days": {"count": 5, "amount": 42000.00, "percentage": 11.91},
             "31_60_days": {"count": 2, "amount": 16800.00, "percentage": 4.76},
-            "61_plus_days": {"count": 1, "amount": 8400.00, "percentage": 2.38}
+            "61_plus_days": {"count": 1, "amount": 168000.00, "percentage": 2.38}
         }
     }
     ```

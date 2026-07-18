@@ -15,6 +15,16 @@ class SubscriptionStatus(str, Enum):
     CANCELLED = "cancelled"      # Subscription ended
 
 
+class BillingPlan(str, Enum):
+    """How a school is billed for the platform.
+
+    Stored as a plain String column (not a native Postgres enum) deliberately —
+    this codebase has been bitten repeatedly by native-enum name/value mismatches.
+    """
+    TERMLY = "termly"    # GHS per student per academic term (default)
+    MONTHLY = "monthly"  # GHS per student per calendar month (cash-flow flexibility)
+
+
 class PlatformSubscription(SQLModel, table=True):
     """School platform subscription per academic term"""
     __tablename__ = "platform_subscriptions"
@@ -25,8 +35,10 @@ class PlatformSubscription(SQLModel, table=True):
     
     # Billing snapshot at generation time
     student_count: int  # Active students at billing time
-    unit_price: float = 20.0  # GHS per student (configurable)
+    unit_price: float = 400.0  # GHS per student (per school's BillingConfiguration)
     total_amount_due: float  # student_count × unit_price
+    billing_plan: BillingPlan = Field(default=BillingPlan.TERMLY, sa_column=Column(String, server_default="termly"))
+    billing_month: Optional[str] = Field(default=None, index=True)  # "YYYY-MM", set only for monthly-plan invoices
     
     # Payment tracking
     amount_paid: float = 0.0
@@ -115,6 +127,8 @@ class PlatformSubscriptionResponse(SQLModel):
     total_amount_due: float
     amount_paid: float
     status: SubscriptionStatus
+    billing_plan: str = "termly"
+    billing_month: Optional[str] = None
     billing_date: datetime
     due_date: datetime
     paid_at: Optional[datetime]
@@ -172,8 +186,11 @@ class BillingConfiguration(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     school_id: str = Field(index=True, unique=True)
     
-    # Base pricing
-    unit_price: float = 20.0  # GHS per student
+    # Base pricing (per student). Termly is the default plan; monthly exists for
+    # cash-flow flexibility and is deliberately dearer over a term (see growth playbook).
+    unit_price: float = 400.0  # GHS per student per term
+    monthly_unit_price: float = 150.0  # GHS per student per month (monthly plan)
+    billing_plan: BillingPlan = Field(default=BillingPlan.TERMLY, sa_column=Column(String, server_default="termly"))
     grace_period_days: int = 7  # Days after due date before late fee applies
     late_fee_percentage: float = 2.5  # % of outstanding balance
     max_late_fee: Optional[float] = None  # Cap on late fee amount
@@ -268,6 +285,8 @@ class BillingConfigurationResponse(SQLModel):
     """Response model for billing configuration"""
     school_id: str
     unit_price: float
+    monthly_unit_price: float = 150.0
+    billing_plan: str = "termly"
     grace_period_days: int
     late_fee_percentage: float
     enable_reminders: bool

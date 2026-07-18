@@ -9,7 +9,7 @@ from sqlmodel import select
 from models.billing import (
     PlatformSubscription, SubscriptionInvoice, SubscriptionStatus,
     PlatformSubscriptionResponse, SubscriptionInvoiceResponse,
-    SubscriptionMetrics
+    SubscriptionMetrics, BillingConfiguration, BillingPlan
 )
 from models.school import AcademicTerm
 from models.student import Student, StudentStatus
@@ -26,8 +26,28 @@ class PlatformBillingService:
     
     def __init__(self, paystack_secret_key: str):
         self.paystack = PaystackService(paystack_secret_key)
-        self.unit_price = 20.0  # GHS per student
-    
+
+    async def _get_billing_config(
+        self, session: AsyncSession, school_id: str
+    ) -> BillingConfiguration:
+        """Per-school pricing/plan; creates the default config on first use.
+
+        Defaults: GHS 400/student/term (termly plan) or GHS 150/student/month.
+        Pilot schools and negotiated discounts are handled by editing this row.
+        """
+        result = await session.execute(
+            select(BillingConfiguration).where(
+                BillingConfiguration.school_id == school_id
+            )
+        )
+        config = result.scalar_one_or_none()
+        if not config:
+            config = BillingConfiguration(school_id=school_id)
+            session.add(config)
+            await session.flush()
+        return config
+
+
     async def generate_term_subscription(
         self,
         session: AsyncSession,
@@ -48,19 +68,31 @@ class PlatformBillingService:
         }
         """
         try:
-            # Check if subscription already exists for this term
-            existing = await session.execute(
-                select(PlatformSubscription).where(
-                    PlatformSubscription.school_id == school_id,
-                    PlatformSubscription.academic_term_id == academic_term_id
+            config = await self._get_billing_config(session, school_id)
+            plan = BillingPlan(config.billing_plan) if isinstance(config.billing_plan, str) else config.billing_plan
+            billing_month = datetime.utcnow().strftime("%Y-%m") if plan == BillingPlan.MONTHLY else None
+
+            # Uniqueness: termly plans bill once per term; monthly plans bill once
+            # per calendar month (multiple subscriptions per term are expected).
+            if plan == BillingPlan.MONTHLY:
+                existing = await session.execute(
+                    select(PlatformSubscription).where(
+                        PlatformSubscription.school_id == school_id,
+                        PlatformSubscription.billing_month == billing_month
+                    )
                 )
-            )
-            if existing.scalar_one_or_none():
-                return {
-                    "success": False,
-                    "error": "Subscription already exists for this term"
-                }
-            
+                duplicate_error = f"Subscription already exists for {billing_month}"
+            else:
+                existing = await session.execute(
+                    select(PlatformSubscription).where(
+                        PlatformSubscription.school_id == school_id,
+                        PlatformSubscription.academic_term_id == academic_term_id
+                    )
+                )
+                duplicate_error = "Subscription already exists for this term"
+            if existing.scalars().first():
+                return {"success": False, "error": duplicate_error}
+
             # Get academic term details
             term_result = await session.execute(
                 select(AcademicTerm).where(AcademicTerm.id == academic_term_id)
@@ -68,7 +100,7 @@ class PlatformBillingService:
             academic_term = term_result.scalar_one_or_none()
             if not academic_term:
                 return {"success": False, "error": "Academic term not found"}
-            
+
             # Count active students for this school
             students_result = await session.execute(
                 select(Student).where(
@@ -78,31 +110,34 @@ class PlatformBillingService:
             )
             active_students = students_result.scalars().all()
             student_count = len(active_students)
-            
+
             if student_count == 0:
                 return {
                     "success": False,
                     "error": "No active students in school"
                 }
-            
-            # Calculate subscription amount
-            total_due = student_count * self.unit_price
+
+            # Calculate subscription amount from the school's configured plan
+            unit_price = config.monthly_unit_price if plan == BillingPlan.MONTHLY else config.unit_price
+            total_due = student_count * unit_price
             due_date = datetime.utcnow() + timedelta(days=30)
-            
+
             # Create subscription record
             subscription = PlatformSubscription(
                 school_id=school_id,
                 academic_term_id=academic_term_id,
                 student_count=student_count,
-                unit_price=self.unit_price,
+                unit_price=unit_price,
                 total_amount_due=total_due,
+                billing_plan=plan,
+                billing_month=billing_month,
                 due_date=due_date,
                 status=SubscriptionStatus.PENDING
             )
-            
+
             session.add(subscription)
             await session.flush()
-            
+
             # Create invoice
             invoice_number = await self._generate_invoice_number(session, school_id)
             invoice = SubscriptionInvoice(
@@ -112,7 +147,7 @@ class PlatformBillingService:
                 academic_year=academic_term.academic_year,
                 term=academic_term.term.value,
                 student_count=student_count,
-                unit_price=self.unit_price,
+                unit_price=unit_price,
                 subtotal=total_due,
                 total_amount=total_due,
                 due_date=due_date,
@@ -406,6 +441,8 @@ class PlatformBillingService:
             total_amount_due=sub.total_amount_due,
             amount_paid=sub.amount_paid,
             status=sub.status,
+            billing_plan=sub.billing_plan if isinstance(sub.billing_plan, str) else sub.billing_plan.value,
+            billing_month=sub.billing_month,
             billing_date=sub.billing_date,
             due_date=sub.due_date,
             paid_at=sub.paid_at,
@@ -437,6 +474,8 @@ class PlatformBillingService:
             total_amount_due=sub.total_amount_due,
             amount_paid=sub.amount_paid,
             status=sub.status,
+            billing_plan=sub.billing_plan if isinstance(sub.billing_plan, str) else sub.billing_plan.value,
+            billing_month=sub.billing_month,
             billing_date=sub.billing_date,
             due_date=sub.due_date,
             paid_at=sub.paid_at,
@@ -470,6 +509,8 @@ class PlatformBillingService:
                 total_amount_due=sub.total_amount_due,
                 amount_paid=sub.amount_paid,
                 status=sub.status,
+                billing_plan=sub.billing_plan if isinstance(sub.billing_plan, str) else sub.billing_plan.value,
+                billing_month=sub.billing_month,
                 billing_date=sub.billing_date,
                 due_date=sub.due_date,
                 paid_at=sub.paid_at,
