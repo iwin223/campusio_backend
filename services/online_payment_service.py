@@ -170,6 +170,116 @@ class OnlinePaymentService:
                 "error": f"Error: {str(e)}"
             }
     
+    async def request_momo_payment(
+        self,
+        session: AsyncSession,
+        fee_id: str,
+        school_id: str,
+        provider: str,
+        phone: Optional[str] = None,
+        amount_to_pay: Optional[float] = None,
+    ) -> Dict:
+        """School-initiated mobile-money payment request.
+
+        Sends a MoMo approval prompt to the parent's registered phone (or an
+        explicit phone), so parents without smartphones can pay by approving
+        on any handset. Confirmation flows through the same Paystack webhook
+        as every other payment, so GL posting and receipts are identical.
+        """
+        try:
+            fee_result = await session.execute(select(Fee).where(Fee.id == fee_id))
+            fee = fee_result.scalar_one_or_none()
+            if not fee:
+                return {"success": False, "error": "Fee not found"}
+            if fee.school_id != school_id:
+                return {"success": False, "error": "Unauthorized fee access"}
+
+            amount_due = fee.amount_due - fee.amount_paid
+            if amount_due <= 0:
+                return {"success": False, "error": "No outstanding balance on this fee"}
+
+            if amount_to_pay is not None:
+                if amount_to_pay <= 0:
+                    return {"success": False, "error": "Payment amount must be greater than zero"}
+                if amount_to_pay > amount_due:
+                    return {"success": False, "error": f"Amount cannot exceed outstanding balance of GHS {amount_due:.2f}"}
+                payment_amount = amount_to_pay
+            else:
+                payment_amount = amount_due
+
+            # Find the student's parent for the wallet number + receipt email
+            from models.student import StudentParent
+            link_result = await session.execute(
+                select(StudentParent).where(StudentParent.student_id == fee.student_id)
+            )
+            link = link_result.scalars().first()
+            if not link:
+                return {"success": False, "error": "No parent linked to this student"}
+            parent_result = await session.execute(
+                select(Parent).where(Parent.id == link.parent_id)
+            )
+            parent_record = parent_result.scalar_one_or_none()
+            if not parent_record:
+                return {"success": False, "error": "Parent record not found"}
+
+            momo_phone = (phone or parent_record.phone or "").strip()
+            if not momo_phone:
+                return {"success": False, "error": "No phone number on record — enter one to send the prompt to"}
+            parent_email = parent_record.email or f"parent-{parent_record.id}@campusio.online"
+
+            transaction_id = f"TXN-{uuid.uuid4().hex[:12].upper()}"
+            transaction = OnlineTransaction(
+                school_id=school_id,
+                fee_id=fee_id,
+                student_id=fee.student_id,
+                parent_id=parent_record.id,
+                amount=payment_amount,
+                gateway="paystack",
+                reference=transaction_id,
+                transaction_type=TransactionType.FEE,
+                status=TransactionStatus.PENDING,
+            )
+            session.add(transaction)
+            await session.flush()
+
+            result = await self.paystack.charge_mobile_money(
+                amount_kobo=int(payment_amount * 100),
+                email=parent_email,
+                phone=momo_phone,
+                provider=provider,
+                reference=transaction_id,
+                metadata={
+                    "fee_id": fee_id,
+                    "student_id": fee.student_id,
+                    "transaction_id": transaction_id,
+                    "school_initiated": True,
+                },
+            )
+
+            if result["success"]:
+                transaction.status = TransactionStatus.PROCESSING
+                session.add(transaction)
+                await session.commit()
+                masked = momo_phone[:3] + "****" + momo_phone[-3:] if len(momo_phone) >= 6 else momo_phone
+                return {
+                    "success": True,
+                    "transaction_id": str(transaction.id),
+                    "reference": transaction_id,
+                    "amount": payment_amount,
+                    "phone": masked,
+                    "message": result.get("display_text"),
+                }
+
+            transaction.status = TransactionStatus.FAILED
+            transaction.failed_reason = result.get("error", "Mobile money charge failed")
+            session.add(transaction)
+            await session.commit()
+            return {"success": False, "error": result.get("error", "Mobile money charge failed")}
+
+        except Exception as e:
+            logger.error(f"Error requesting MoMo payment: {str(e)}")
+            return {"success": False, "error": f"Error: {str(e)}"}
+
     async def process_webhook(
         self,
         session: AsyncSession,

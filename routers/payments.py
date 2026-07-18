@@ -151,6 +151,14 @@ class InitiatePaymentRequest(BaseModel):
     amount_to_pay: Optional[float] = None  # Optional partial payment amount
 
 
+class RequestMomoPaymentRequest(BaseModel):
+    """School-initiated mobile-money payment prompt to a parent's phone"""
+    fee_id: str
+    provider: str  # "mtn" | "vod" (Telecel) | "atl" (AirtelTigo)
+    phone: Optional[str] = None  # Defaults to the linked parent's registered phone
+    amount_to_pay: Optional[float] = None  # Optional partial amount
+
+
 class TransactionResponse:
     """Response for transaction status"""
     transaction_id: str
@@ -168,6 +176,49 @@ class TransactionResponse:
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
+
+@router.post("/request-momo", status_code=200)
+async def request_momo_payment(
+    request_data: RequestMomoPaymentRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Send a mobile-money payment prompt to a parent's phone (school-initiated).
+
+    **Auth Required:** school_admin or super_admin
+
+    The parent approves the charge on any phone — no smartphone, app, or
+    browser needed. Confirmation lands through the standard Paystack webhook,
+    so receipts and GL posting behave exactly like online payments.
+
+    Providers: "mtn" (MTN MoMo), "vod" (Telecel Cash), "atl" (AT Money).
+    """
+    if current_user.role not in (UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN):
+        raise HTTPException(status_code=403, detail="Only school admins can request payments")
+    if not current_user.school_id:
+        raise HTTPException(status_code=403, detail="No school context")
+    if request_data.provider not in ("mtn", "vod", "atl"):
+        raise HTTPException(status_code=400, detail="Provider must be one of: mtn, vod, atl")
+
+    try:
+        services = get_payment_services()
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment gateway not configured — add PAYSTACK_SECRET_KEY to enable mobile money prompts"
+        )
+    result = await services["online_payment"].request_momo_payment(
+        session=session,
+        fee_id=request_data.fee_id,
+        school_id=current_user.school_id,
+        provider=request_data.provider,
+        phone=request_data.phone,
+        amount_to_pay=request_data.amount_to_pay,
+    )
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error", "Payment request failed"))
+    return result
+
 
 @router.post("/initialize", status_code=200)
 async def initialize_payment(

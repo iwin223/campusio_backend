@@ -92,6 +92,69 @@ class PaystackService:
                 "error": f"Connection error: {str(e)}"
             }
     
+    async def charge_mobile_money(
+        self,
+        amount_kobo: int,
+        email: str,
+        phone: str,
+        provider: str,
+        reference: str,
+        metadata: Dict = None,
+    ) -> Dict:
+        """Initiate a mobile-money charge — pushes an approval PROMPT to the
+        parent's phone, so payment works on any handset with no app or browser.
+
+        Args:
+            amount_kobo: amount in pesewas (GHS x 100)
+            phone: MoMo wallet number, e.g. "0244000000"
+            provider: Paystack MoMo code — "mtn", "vod" (Telecel), or "atl" (AirtelTigo)
+            reference: our transaction reference
+
+        The charge resolves asynchronously: the parent approves on their phone
+        and Paystack fires the same charge.success webhook as card payments.
+        """
+        headers = {
+            "Authorization": f"Bearer {self.secret_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "email": email,
+            "amount": amount_kobo,
+            "currency": "GHS",
+            "reference": reference,
+            "mobile_money": {"phone": phone, "provider": provider},
+            "metadata": metadata or {},
+        }
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.BASE_URL}/charge",
+                    headers=headers,
+                    json=payload,
+                    timeout=15.0,
+                )
+                data = response.json()
+                if response.status_code == 200 and data.get("status"):
+                    charge = data.get("data", {})
+                    logger.info(
+                        f"MoMo charge initiated: {reference} -> {phone} ({provider}), "
+                        f"status={charge.get('status')}"
+                    )
+                    return {
+                        "success": True,
+                        "charge_status": charge.get("status"),  # e.g. pay_offline, send_otp
+                        "display_text": charge.get("display_text")
+                        or "A payment prompt has been sent to the phone. Approve it to complete payment.",
+                        "reference": charge.get("reference", reference),
+                    }
+                error_msg = data.get("message", "Mobile money charge failed")
+                logger.error(f"Paystack MoMo charge failed: {response.text[:300]}")
+                return {"success": False, "error": error_msg}
+        except Exception as e:
+            logger.error(f"Paystack MoMo charge error: {str(e)}")
+            return {"success": False, "error": f"Connection error: {str(e)}"}
+
     async def verify_payment(self, reference: str) -> Dict:
         """
         Verify payment status with Paystack
