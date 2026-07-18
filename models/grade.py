@@ -76,5 +76,12 @@ class ReportCard(SQLModel, table=True):
     head_teacher_remarks: Optional[str] = None
     conduct: Optional[str] = None
     interest: Optional[str] = None
+    # GES SBA terminal-report fields
+    attitude: Optional[str] = None
+    days_present: Optional[int] = None   # Attendance: days present out of...
+    days_total: Optional[int] = None     # ...total school days in the term
+    vacation_date: Optional[str] = None    # e.g. "12th December, 2026"
+    reopening_date: Optional[str] = None   # e.g. "6th January, 2027"
+    promoted_to: Optional[str] = None      # Term 3 only, e.g. "Primary 5"
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     generated_by: str

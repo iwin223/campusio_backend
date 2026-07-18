@@ -38,6 +38,13 @@ class GenerateReportCardRequest(SQLModel):
     academic_term_id: str
     class_teacher_remarks: Optional[str] = None
     head_teacher_remarks: Optional[str] = None
+    # GES SBA terminal-report fields
+    attitude: Optional[str] = None
+    conduct: Optional[str] = None
+    interest: Optional[str] = None
+    vacation_date: Optional[str] = None
+    reopening_date: Optional[str] = None
+    promoted_to: Optional[str] = None
 
 
 
@@ -603,8 +610,16 @@ async def generate_report_card(
         average_score=average_score,
         class_size=class_size,
         attendance_percentage=attendance_percentage,
+        days_present=present_days,
+        days_total=total_days,
         class_teacher_remarks=class_teacher_remarks,
         head_teacher_remarks=head_teacher_remarks,
+        attitude=body.attitude,
+        conduct=body.conduct,
+        interest=body.interest,
+        vacation_date=body.vacation_date,
+        reopening_date=body.reopening_date,
+        promoted_to=body.promoted_to,
         generated_by=current_user.id
     )
     session.add(report_card)

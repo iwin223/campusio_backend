@@ -141,69 +141,68 @@ class ReportCardPDFService:
             else:
                 return getattr(obj, key, default)
         
-        # Group grades by subject
+        # ── GES SBA split ────────────────────────────────────────────────────
+        # Termly reports follow the GES School Based Assessment format:
+        # CLASS SCORE (SBA: classwork/homework/quiz/mid-term/project) scaled to
+        # 50%, EXAM SCORE (end-of-term) scaled to 50%, TOTAL out of 100 graded
+        # on the 1-9 GES scale.
+        EXAM_TYPES = {"end_of_term"}
+
         subjects_data = {}
         for grade in grades:
             subject = subjects_map.get(grade.subject_id)
             subject_name = subject.name if subject else "Unknown"
             subject_code = subject.code if subject and hasattr(subject, 'code') else "N/A"
-            
+
             if subject_name not in subjects_data:
                 subjects_data[subject_name] = {
                     "subject_id": grade.subject_id,
                     "subject_code": subject_code,
                     "subject_name": subject_name,
-                    "grades": [],
-                    "total_score": 0,
-                    "total_max": 0,
+                    "sba_score": 0.0, "sba_max": 0.0,
+                    "exam_score": 0.0, "exam_max": 0.0,
                 }
-            
-            # Calculate percentage and letter grade
-            percentage = round(grade.score / grade.max_score * 100, 1) if grade.max_score > 0 else 0
-            letter_grade = ReportCardPDFService._get_letter_grade(percentage)
-            
-            subjects_data[subject_name]["grades"].append({
-                "assessment_type": grade.assessment_type.value if hasattr(grade.assessment_type, 'value') else str(grade.assessment_type),
-                "score": grade.score,
-                "max_score": grade.max_score,
-                "percentage": percentage,
-                "grade": letter_grade["grade"],
-                "description": letter_grade["description"],
-                "date_display": grade.created_at.strftime("%d %b %Y") if hasattr(grade.created_at, 'strftime') else str(grade.created_at)
-            })
-            
-            subjects_data[subject_name]["total_score"] += grade.score
-            subjects_data[subject_name]["total_max"] += grade.max_score
-        
-        # Calculate averages for each subject
+
+            atype = grade.assessment_type.value if hasattr(grade.assessment_type, 'value') else str(grade.assessment_type)
+            bucket = subjects_data[subject_name]
+            if atype in EXAM_TYPES:
+                bucket["exam_score"] += grade.score
+                bucket["exam_max"] += grade.max_score
+            else:
+                bucket["sba_score"] += grade.score
+                bucket["sba_max"] += grade.max_score
+
         subjects_list = []
-        for subject_name, data in subjects_data.items():
-            avg_percentage = round((data["total_score"] / data["total_max"] * 100) if data["total_max"] > 0 else 0, 1)
-            avg_grade = ReportCardPDFService._get_letter_grade(avg_percentage)
-            
+        subject_totals = []
+        for subject_name, data in sorted(subjects_data.items()):
+            class_score_50 = round((data["sba_score"] / data["sba_max"]) * 50, 1) if data["sba_max"] > 0 else 0.0
+            exam_score_50 = round((data["exam_score"] / data["exam_max"]) * 50, 1) if data["exam_max"] > 0 else 0.0
+            total_100 = round(class_score_50 + exam_score_50, 1)
+            grade_info = ReportCardPDFService._get_letter_grade(total_100)
+            subject_totals.append(total_100)
+
             subjects_list.append({
                 "subject_name": subject_name,
                 "subject_code": data["subject_code"],
-                "grades": data["grades"],
-                "total_score": data["total_score"],
-                "total_max": data["total_max"],
-                "average_percentage": avg_percentage,
-                "average_grade": avg_grade["grade"],
-                "average_description": avg_grade["description"]
+                "class_score": class_score_50,     # out of 50
+                "exam_score": exam_score_50,       # out of 50
+                "total_score": total_100,          # out of 100
+                "grade": grade_info["grade"],      # GES 1-9
+                "remarks": grade_info["description"],
             })
-        
-        # Calculate overall performance
-        if grades:
-            total_score = sum(g.score for g in grades)
-            total_max = sum(g.max_score for g in grades)
-            overall_percentage = round((total_score / total_max * 100) if total_max > 0 else 0, 1)
-        else:
-            total_score = 0
-            total_max = 0
-            overall_percentage = 0
-        
+
+        overall_percentage = round(sum(subject_totals) / len(subject_totals), 1) if subject_totals else 0
         overall_grade_info = ReportCardPDFService._get_letter_grade(overall_percentage)
-        
+
+        # Attendance: prefer explicit day counts (GES format shows "x out of y")
+        days_present = get_value(report_card, 'days_present', None)
+        days_total = get_value(report_card, 'days_total', None)
+        if days_present is not None and days_total:
+            attendance_display = f"{days_present} out of {days_total}"
+        else:
+            pct = get_value(report_card, 'attendance_percentage', None)
+            attendance_display = f"{pct}%" if pct is not None else "Not Recorded"
+
         return {
             "school_name": get_value(student, 'school_name', 'School Name Not Available'),
             "student_name": get_value(student, 'first_name', 'Name not Available'),
@@ -211,6 +210,7 @@ class ReportCardPDFService:
             "class_name": get_value(student, 'class_name', 'Not Assigned'),
             "academic_term": academic_term_name or "Term 1, 2026",
             "generated_date": datetime.utcnow().strftime("%d %B %Y"),
+            "attendance_display": attendance_display,
             "attendance_percentage": get_value(report_card, 'attendance_percentage', 'Not Available'),
             "class_size": get_value(report_card, 'class_size', 'Not Available'),
             "position": get_value(report_card, 'position', 'Not Available'),
@@ -218,8 +218,15 @@ class ReportCardPDFService:
             "overall_grade": overall_grade_info["grade"],
             "overall_description": overall_grade_info["description"],
             "subjects": subjects_list,
-            "class_teacher_remarks": get_value(report_card, 'class_teacher_remarks', 'Not Available'),
-            "head_teacher_remarks": get_value(report_card, 'head_teacher_remarks', 'Not Available'),
+            "class_teacher_remarks": get_value(report_card, 'class_teacher_remarks', None) or "",
+            "head_teacher_remarks": get_value(report_card, 'head_teacher_remarks', None) or "",
+            # GES SBA footer blocks
+            "attitude": get_value(report_card, 'attitude', None) or "",
+            "conduct": get_value(report_card, 'conduct', None) or "",
+            "interest": get_value(report_card, 'interest', None) or "",
+            "vacation_date": get_value(report_card, 'vacation_date', None) or "",
+            "reopening_date": get_value(report_card, 'reopening_date', None) or "",
+            "promoted_to": get_value(report_card, 'promoted_to', None) or "",
         }
     
     @staticmethod
