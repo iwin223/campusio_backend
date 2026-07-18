@@ -8,6 +8,7 @@ Endpoints for:
 """
 import logging
 from typing import Optional, List
+from sqlmodel import SQLModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -30,6 +31,15 @@ from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fiscal-periods", tags=["Fiscal Periods"])
+
+
+class PeriodNotesRequest(SQLModel):
+    notes: Optional[str] = None
+
+
+class CheckPostingRequest(SQLModel):
+    is_adjustment_entry: bool = False
+
 
 
 # ==================== Create ====================
@@ -285,11 +295,12 @@ async def get_fiscal_period(
 @router.post("/{period_id}/lock", response_model=dict)
 async def lock_fiscal_period(
     period_id: str,
-    notes: Optional[str] = Query(None),
+    body: PeriodNotesRequest = PeriodNotesRequest(),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    notes = body.notes
     """Lock a fiscal period (end of audit, before closing)
     
     Args:
@@ -339,11 +350,12 @@ async def lock_fiscal_period(
 @router.post("/{period_id}/close", response_model=dict)
 async def close_fiscal_period(
     period_id: str,
-    notes: Optional[str] = Query(None),
+    body: PeriodNotesRequest = PeriodNotesRequest(),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    notes = body.notes
     """Close a fiscal period (after closing entries are posted)
     
     Args:
@@ -431,10 +443,11 @@ async def set_current_period(
 @router.post("/{period_id}/check-posting", response_model=dict)
 async def check_if_can_post_to_period(
     period_id: str,
-    is_adjustment_entry: bool = Query(False),
+    body: CheckPostingRequest = CheckPostingRequest(),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    is_adjustment_entry = body.is_adjustment_entry
     """Check if transactions can be posted to a period
     
     Args:

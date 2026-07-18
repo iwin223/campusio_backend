@@ -10,6 +10,7 @@ Endpoints for:
 """
 import logging
 from typing import Optional, List
+from sqlmodel import SQLModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -31,15 +32,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bank-reconciliation", tags=["Bank Reconciliation"])
 
 
+# ── Request bodies (mutating endpoints must never take bare query params) ──
+
+class ImportBankStatementRequest(SQLModel):
+    account_id: str
+    statement_date: str
+    statement_beginning_balance: float
+    statement_ending_balance: float
+    transactions: Optional[List[BankStatementCreate]] = None
+
+
+class AutoMatchRequest(SQLModel):
+    matching_window_days: int = 5
+
+
+class ManualMatchRequest(SQLModel):
+    variance_reason: Optional[str] = None
+
+
+
 # ==================== Bank Statement Import ====================
 
 @router.post("/import", response_model=dict)
 async def import_bank_statement(
-    account_id: str = Query(...),
-    statement_date: str = Query(...),
-    statement_beginning_balance: float = Query(...),
-    statement_ending_balance: float = Query(...),
-    transactions: List[BankStatementCreate] = None,
+    body: ImportBankStatementRequest,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
@@ -65,6 +81,11 @@ async def import_bank_statement(
     Raises:
         HTTPException 400: If import fails
     """
+    account_id = body.account_id
+    statement_date = body.statement_date
+    statement_beginning_balance = body.statement_beginning_balance
+    statement_ending_balance = body.statement_ending_balance
+    transactions = body.transactions
     try:
         statement_dt = datetime.fromisoformat(statement_date)
         
@@ -105,10 +126,11 @@ async def import_bank_statement(
 @router.post("/auto-match/{reconciliation_id}", response_model=dict)
 async def auto_match_transactions(
     reconciliation_id: str,
-    matching_window_days: int = Query(5),
+    body: AutoMatchRequest = AutoMatchRequest(),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    matching_window_days = body.matching_window_days
     """Automatically match bank transactions to GL entries
     
     Uses intelligent matching rules:
@@ -156,11 +178,12 @@ async def auto_match_transactions(
 async def manually_match_transaction(
     bank_statement_id: str,
     journal_entry_id: str,
-    variance_reason: Optional[str] = Query(None),
+    body: ManualMatchRequest = ManualMatchRequest(),
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    variance_reason = body.variance_reason
     """Manually match a bank transaction to GL entry
     
     Used for transactions that couldn't be auto-matched and require

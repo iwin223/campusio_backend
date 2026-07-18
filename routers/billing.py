@@ -7,7 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
-from sqlmodel import select
+from sqlmodel import select, SQLModel
 
 from database import get_session
 from auth import get_current_user
@@ -27,6 +27,27 @@ from services.platform_billing_service import PlatformBillingService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/billing", tags=["billing"])
+
+
+class WaiveLateFeeRequest(SQLModel):
+    reason: str = "Manual waiver"
+
+
+class ReactivateSubscriptionRequest(SQLModel):
+    verify_payment: bool = True
+
+
+class SendRemindersRequest(SQLModel):
+    school_id: Optional[str] = None
+
+
+class CreateDiscountRuleRequest(SQLModel):
+    min_students: int
+    discount_percentage: Optional[float] = None
+    discount_amount: Optional[float] = None
+    max_students: Optional[int] = None
+    description: str = ""
+
 
 
 def get_billing_service() -> PlatformBillingService:
@@ -790,7 +811,7 @@ async def apply_late_fees(
 @router.post("/subscriptions/{subscription_id}/late-fee/waive", status_code=200)
 async def waive_late_fee(
     subscription_id: str,
-    reason: str = "Manual waiver",
+    body: WaiveLateFeeRequest = WaiveLateFeeRequest(),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -808,6 +829,7 @@ async def waive_late_fee(
     }
     ```
     """
+    reason = body.reason
     
     # Admin or school admin
     if current_user.role not in [UserRole.ADMIN, UserRole.SCHOOL]:
@@ -912,7 +934,7 @@ async def suspend_subscription(
 @router.post("/subscriptions/{subscription_id}/reactivate", status_code=200)
 async def reactivate_subscription(
     subscription_id: str,
-    verify_payment: bool = True,
+    body: ReactivateSubscriptionRequest = ReactivateSubscriptionRequest(),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -933,6 +955,7 @@ async def reactivate_subscription(
     }
     ```
     """
+    verify_payment = body.verify_payment
     
     if current_user.role not in [UserRole.ADMIN, UserRole.SCHOOL]:
         raise HTTPException(
@@ -1018,7 +1041,7 @@ async def get_suspended_subscriptions(
 
 @router.post("/reminders/send-pending", status_code=200)
 async def send_pending_reminders(
-    school_id: Optional[str] = None,
+    body: SendRemindersRequest = SendRemindersRequest(),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -1041,6 +1064,7 @@ async def send_pending_reminders(
     }
     ```
     """
+    school_id = body.school_id
     
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
@@ -1102,11 +1126,7 @@ async def get_reminder_history(
 
 @router.post("/discounts/rules", status_code=201)
 async def create_discount_rule(
-    min_students: int,
-    discount_percentage: float = None,
-    discount_amount: float = None,
-    max_students: int = None,
-    description: str = "",
+    body: CreateDiscountRuleRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -1130,6 +1150,11 @@ async def create_discount_rule(
     }
     ```
     """
+    min_students = body.min_students
+    discount_percentage = body.discount_percentage
+    discount_amount = body.discount_amount
+    max_students = body.max_students
+    description = body.description
     
     if current_user.role not in [UserRole.ADMIN, UserRole.SCHOOL]:
         raise HTTPException(

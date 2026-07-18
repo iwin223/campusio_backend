@@ -1,6 +1,6 @@
 """Fees router"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlmodel import select, func, and_
+from sqlmodel import select, func, and_, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from typing import Optional, List
@@ -21,6 +21,12 @@ from auth import get_current_user, require_roles
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/fees", tags=["Fees & Payments"])
+
+
+class AssignFeeToClassRequest(SQLModel):
+    structure_id: str
+    class_id: str
+
 
 
 # Fee Types with descriptions
@@ -532,12 +538,13 @@ async def get_student_payments(
 
 @router.post("/assign-class", response_model=dict)
 async def assign_fee_to_class(
-    structure_id: str,
-    class_id: str,
+    body: AssignFeeToClassRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
     """Assign a fee structure to all students in a class"""
+    structure_id = body.structure_id
+    class_id = body.class_id
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")

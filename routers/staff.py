@@ -1,6 +1,6 @@
 """Staff router"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
-from sqlmodel import select, func
+from sqlmodel import select, func, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
@@ -18,6 +18,14 @@ from auth import get_current_user, require_roles, get_password_hash
 from services.csv_import_service import CSVImportService
 
 router = APIRouter(prefix="/staff", tags=["Staff"])
+
+
+class AssignTeacherRequest(SQLModel):
+    class_id: str
+    subject_id: str
+    academic_term_id: str
+    is_class_teacher: bool = False
+
 
 
 def _normalize_name(name: str) -> str:
@@ -471,14 +479,15 @@ async def update_staff(
 @router.post("/{staff_id}/assignments", response_model=dict)
 async def assign_teacher(
     staff_id: str,
-    class_id: str,
-    subject_id: str,
-    academic_term_id: str,
-    is_class_teacher: bool = False,
+    body: AssignTeacherRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
     """Assign a teacher to a class and subject"""
+    class_id = body.class_id
+    subject_id = body.subject_id
+    academic_term_id = body.academic_term_id
+    is_class_teacher = body.is_class_teacher
     result = await session.execute(select(Staff).where(Staff.id == staff_id))
     staff = result.scalar_one_or_none()
     

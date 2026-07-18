@@ -1,6 +1,6 @@
 """Student Portal Router - API endpoints for students to view their own information"""
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from sqlmodel import select
+from sqlmodel import select, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -24,6 +24,12 @@ from auth import get_current_user, require_roles
 from services.auto_grader import AutoGrader
 
 router = APIRouter(prefix="/student-portal", tags=["Student Portal"])
+
+
+class SubmitAssignmentRequest(SQLModel):
+    submission_text: Optional[str] = None
+    answers: Optional[dict] = None
+
 
 
 # GES Grading Scale
@@ -937,8 +943,7 @@ async def submit_assignment_file(
 @router.post("/assignments/{assignment_id}/submit", response_model=dict)
 async def submit_assignment(
     assignment_id: str,
-    submission_text: Optional[str] = None,
-    answers: Optional[dict] = None,
+    body: SubmitAssignmentRequest,
     current_user: User = Depends(require_roles(UserRole.STUDENT)),
     session: AsyncSession = Depends(get_session)
 ):
@@ -949,6 +954,8 @@ async def submit_assignment(
         submission_text: Text submission or answers JSON string
         answers: Dict of {question_id: answer} for quiz submissions
     """
+    submission_text = body.submission_text
+    answers = body.answers
     student = await get_student_record(current_user, session)
     
     # Get assignment

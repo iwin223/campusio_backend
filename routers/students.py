@@ -1,6 +1,6 @@
 """Students router"""
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, UploadFile, File
-from sqlmodel import select, func
+from sqlmodel import select, func, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from typing import Optional
@@ -17,6 +17,11 @@ from services.csv_import_service import CSVImportService
 from services.email_service import email_service
 
 router = APIRouter(prefix="/students", tags=["Students"])
+
+
+class AssignStudentClassRequest(SQLModel):
+    class_id: str
+
 
 
 def _normalize_name(name: str) -> str:
@@ -424,11 +429,12 @@ async def update_student(
 @router.put("/{student_id}/class", response_model=dict)
 async def assign_student_to_class(
     student_id: str,
-    class_id: str,
+    body: AssignStudentClassRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
     """Assign student to a class"""
+    class_id = body.class_id
     result = await session.execute(select(Student).where(Student.id == student_id))
     student = result.scalar_one_or_none()
     

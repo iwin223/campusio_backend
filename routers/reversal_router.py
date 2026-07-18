@@ -8,6 +8,7 @@ Endpoints for:
 """
 import logging
 from typing import Optional, List
+from sqlmodel import SQLModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -21,18 +22,39 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reversals", tags=["Reversals"])
 
 
+# ── Request bodies ──
+
+class FullReversalRequest(SQLModel):
+    reversal_reason: str
+    reversal_notes: Optional[str] = None
+
+
+class PartialReversalRequest(SQLModel):
+    line_numbers: List[int]
+    reversal_reason: str
+    reversal_notes: Optional[str] = None
+
+
+class AccountReversalRequest(SQLModel):
+    account_ids: List[str]
+    reversal_reason: str
+    reversal_notes: Optional[str] = None
+
+
+
 # ==================== Full Reversal ====================
 
 @router.post("/{entry_id}/reverse-full", response_model=dict)
 async def reverse_full_entry(
     entry_id: str,
-    reversal_reason: str = Query(...),
-    reversal_notes: Optional[str] = Query(None),
+    body: FullReversalRequest,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> dict:
+    reversal_reason = body.reversal_reason
+    reversal_notes = body.reversal_notes
     """Reverse an entire posted journal entry
     
     Creates a complete contra-entry that reverses all line items.
@@ -103,14 +125,15 @@ async def reverse_full_entry(
 @router.post("/{entry_id}/reverse-partial", response_model=dict)
 async def reverse_partial_entry(
     entry_id: str,
-    line_numbers: List[int] = Query(...),
-    reversal_reason: str = Query(...),
-    reversal_notes: Optional[str] = Query(None),
+    body: PartialReversalRequest,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> dict:
+    line_numbers = body.line_numbers
+    reversal_reason = body.reversal_reason
+    reversal_notes = body.reversal_notes
     """Reverse specific line items from a posted entry
     
     Creates a contra-entry for only selected line items.
@@ -177,14 +200,15 @@ async def reverse_partial_entry(
 @router.post("/{entry_id}/reverse-accounts", response_model=dict)
 async def reverse_specific_accounts(
     entry_id: str,
-    account_ids: List[str] = Query(...),
-    reversal_reason: str = Query(...),
-    reversal_notes: Optional[str] = Query(None),
+    body: AccountReversalRequest,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> dict:
+    account_ids = body.account_ids
+    reversal_reason = body.reversal_reason
+    reversal_notes = body.reversal_notes
     """Reverse postings to specific GL accounts only
     
     Creates a contra-entry for selected accounts.

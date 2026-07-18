@@ -1,6 +1,6 @@
 """Deduction Rules API Endpoints"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlmodel import select, func
+from sqlmodel import select, func, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 
@@ -14,6 +14,20 @@ from auth import get_current_user, require_roles
 from services.deduction_rules_service import RulesEvaluationService, RulePresetService
 
 router = APIRouter(prefix="/payroll/rules", tags=["Payroll Rules"])
+
+
+class TestRuleRequest(SQLModel):
+    rule_id: str
+    staff_id: str
+    basic_salary: float
+
+
+class TestAllRulesRequest(SQLModel):
+    staff_id: str
+    basic_salary: float
+    period_year: int
+    period_month: int
+
 
 
 # ==================== Rule Management Endpoints ====================
@@ -303,13 +317,14 @@ async def apply_preset_rules(
 
 @router.post("/test", response_model=dict)
 async def test_rule_evaluation(
-    rule_id: str = Query(...),
-    staff_id: str = Query(...),
-    basic_salary: float = Query(...),
+    body: TestRuleRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
     """Test a rule against sample staff data"""
+    rule_id = body.rule_id
+    staff_id = body.staff_id
+    basic_salary = body.basic_salary
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
@@ -347,14 +362,15 @@ async def test_rule_evaluation(
 
 @router.post("/test-all", response_model=dict)
 async def test_all_rules(
-    staff_id: str = Query(...),
-    basic_salary: float = Query(...),
-    period_year: int = Query(...),
-    period_month: int = Query(...),
+    body: TestAllRulesRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
     """Test all applicable rules for a staff member"""
+    staff_id = body.staff_id
+    basic_salary = body.basic_salary
+    period_year = body.period_year
+    period_month = body.period_month
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")

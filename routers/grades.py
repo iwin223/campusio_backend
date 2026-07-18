@@ -1,7 +1,7 @@
 """Grades and Report Cards router"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
-from sqlmodel import select, func
+from sqlmodel import select, func, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_
 from datetime import datetime
@@ -23,6 +23,22 @@ from auth import get_current_user, require_roles
 from services.report_card_pdf_service import ReportCardPDFService
 
 router = APIRouter(prefix="/grades", tags=["Grades & Report Cards"])
+
+
+class CreateGradeScaleRequest(SQLModel):
+    grade: str
+    min_score: float
+    max_score: float
+    description: str
+    gpa_point: float
+
+
+class GenerateReportCardRequest(SQLModel):
+    student_id: str
+    academic_term_id: str
+    class_teacher_remarks: Optional[str] = None
+    head_teacher_remarks: Optional[str] = None
+
 
 
 # ============ TEMPLATE HELPER FUNCTIONS ============
@@ -234,15 +250,16 @@ async def get_student_grades(
 
 @router.post("/scales", response_model=dict)
 async def create_grade_scale(
-    grade: str,
-    min_score: float,
-    max_score: float,
-    description: str,
-    gpa_point: float,
+    body: CreateGradeScaleRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
     """Create a grade scale entry"""
+    grade = body.grade
+    min_score = body.min_score
+    max_score = body.max_score
+    description = body.description
+    gpa_point = body.gpa_point
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
@@ -529,14 +546,15 @@ async def get_grade_scales(
 
 @router.post("/report-cards/generate", response_model=dict)
 async def generate_report_card(
-    student_id: str,
-    academic_term_id: str,
-    class_teacher_remarks: Optional[str] = None,
-    head_teacher_remarks: Optional[str] = None,
+    body: GenerateReportCardRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.TEACHER)),
     session: AsyncSession = Depends(get_session)
 ):
     """Generate a report card for a student"""
+    student_id = body.student_id
+    academic_term_id = body.academic_term_id
+    class_teacher_remarks = body.class_teacher_remarks
+    head_teacher_remarks = body.head_teacher_remarks
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")

@@ -9,6 +9,7 @@ Endpoints for:
 """
 import logging
 from typing import Optional
+from sqlmodel import SQLModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -20,6 +21,12 @@ from database import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/retained-earnings", tags=["Retained Earnings"])
+
+
+class SetOpeningBalancesRequest(SQLModel):
+    from_period_id: str
+    to_period_id: str
+
 
 
 # ==================== Net Income ====================
@@ -117,12 +124,13 @@ async def close_fiscal_period(
 
 @router.post("/set-opening-balances", response_model=dict)
 async def set_opening_balances(
-    from_period_id: str = Query(...),
-    to_period_id: str = Query(...),
+    body: SetOpeningBalancesRequest,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    from_period_id = body.from_period_id
+    to_period_id = body.to_period_id
     """Set opening balances for next period from previous period close
     
     Balance sheet accounts (Asset, Liability, Equity) carry forward their

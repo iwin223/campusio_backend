@@ -10,6 +10,7 @@ Endpoints for:
 """
 import logging
 from typing import Optional, List
+from sqlmodel import SQLModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -30,18 +31,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/subledger-reconciliation", tags=["Sub-Ledger Reconciliation"])
 
 
+class CreateSubledgerReconciliationRequest(SQLModel):
+    subledger_type: SubLedgerType
+    control_account_id: str
+    detail_records: Optional[List[SubLedgerDetailCreate]] = None
+    notes: Optional[str] = None
+
+
+
 # ==================== Reconciliation Creation ====================
 
 @router.post("/create", response_model=dict)
 async def create_subledger_reconciliation(
-    subledger_type: SubLedgerType = Query(...),
-    control_account_id: str = Query(...),
-    detail_records: List[SubLedgerDetailCreate] = None,
-    notes: Optional[str] = Query(None),
+    body: CreateSubledgerReconciliationRequest,
     current_user: dict = Depends(get_current_user),
     school_id: str = Depends(get_current_school_id),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    subledger_type = body.subledger_type
+    control_account_id = body.control_account_id
+    detail_records = body.detail_records
+    notes = body.notes
     """Create a sub-ledger reconciliation and import detail records
     
     Creates a reconciliation record and imports all detail account records

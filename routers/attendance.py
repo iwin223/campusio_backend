@@ -1,6 +1,6 @@
 """Attendance router"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlmodel import select, func
+from sqlmodel import select, func, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from typing import Optional
@@ -12,6 +12,12 @@ from database import get_session
 from auth import get_current_user, require_roles
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
+
+
+class UpdateAttendanceRequest(SQLModel):
+    status: AttendanceStatus
+    remarks: Optional[str] = None
+
 
 
 @router.post("", response_model=dict)
@@ -269,11 +275,12 @@ async def get_student_attendance(
 @router.put("/{attendance_id}", response_model=dict)
 async def update_attendance(
     attendance_id: str,
-    status: AttendanceStatus,
-    remarks: Optional[str] = None,
+    body: UpdateAttendanceRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.TEACHER)),
     session: AsyncSession = Depends(get_session)
 ):
+    status = body.status
+    remarks = body.remarks
     """Update an attendance record"""
     result = await session.execute(select(Attendance).where(Attendance.id == attendance_id))
     attendance = result.scalar_one_or_none()

@@ -30,6 +30,11 @@ from utils.otp import (
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+
+class UpdateUserStatusRequest(SQLModel):
+    is_active: bool
+
+
 # Roles that require mandatory OTP
 MANDATORY_OTP_ROLES = {UserRole.SCHOOL_ADMIN, UserRole.HR, UserRole.SUPER_ADMIN}
 
@@ -499,10 +504,11 @@ async def list_users(
 @router.put("/users/{user_id}/status", response_model=dict)
 async def update_user_status(
     user_id: str,
-    is_active: bool,
+    body: UpdateUserStatusRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
+    is_active = body.is_active
     """Enable/disable user account"""
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()

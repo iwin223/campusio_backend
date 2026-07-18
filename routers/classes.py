@@ -1,6 +1,6 @@
 """Classes and Subjects router"""
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import select, func
+from sqlmodel import select, func, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_
 from datetime import datetime
@@ -13,6 +13,11 @@ from database import get_session
 from auth import get_current_user, require_roles
 
 router = APIRouter(prefix="/classes", tags=["Classes & Subjects"])
+
+
+class AssignSubjectRequest(SQLModel):
+    academic_term_id: str
+
 
 
 @router.post("", response_model=dict)
@@ -331,11 +336,12 @@ async def list_subjects(
 async def assign_subject_to_class(
     class_id: str,
     subject_id: str,
-    academic_term_id: str,
+    body: AssignSubjectRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
     """Assign a subject to a class"""
+    academic_term_id = body.academic_term_id
     school_id = current_user.school_id
     
     existing = await session.execute(

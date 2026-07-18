@@ -31,6 +31,26 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/security", tags=["Student Security"])
 
+
+# ── Request bodies (all mutating endpoints take JSON bodies, never bare
+#    scalar params — FastAPI would silently read those from the query string) ──
+
+from sqlmodel import SQLModel
+
+
+class SchoolScopedRequest(SQLModel):
+    school_id: str
+
+
+class VerifyQRRequest(SQLModel):
+    token: str
+    gate_lat: Optional[float] = None
+    gate_lng: Optional[float] = None
+
+
+class UpdateArrivalStatusRequest(SQLModel):
+    arrival_status: ArrivalStatus
+
 ADMIN_ROLES = (UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)
 OFFICER_ROLES = (UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.SECURITY_OFFICER)
 
@@ -147,7 +167,7 @@ async def update_security_profile(
 
 @router.post("/qr/generate-daily")
 async def generate_daily_qr_tokens(
-    school_id: str,
+    body: SchoolScopedRequest,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(require_roles(*ADMIN_ROLES)),
 ):
@@ -156,6 +176,7 @@ async def generate_daily_qr_tokens(
     Also generates transport dispatch tokens for each route.
     Call this once per school day — idempotent (skips already-issued tokens).
     """
+    school_id = body.school_id
     today = today_str()
     expires = token_expires_at()
     created = 0
@@ -292,11 +313,12 @@ async def email_all_children_qr(
 @router.post("/qr/transport/{route_id}")
 async def generate_transport_qr(
     route_id: str,
-    school_id: str,
+    body: SchoolScopedRequest,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(require_roles(*OFFICER_ROLES)),
 ):
     """Generate (or return existing) dispatch QR for a transport route"""
+    school_id = body.school_id
     today = today_str()
     result = await db.exec(
         select(DailyQRToken).where(
@@ -329,9 +351,7 @@ async def generate_transport_qr(
 
 @router.post("/qr/verify")
 async def verify_qr_token(
-    token: str,
-    gate_lat: Optional[float] = None,
-    gate_lng: Optional[float] = None,
+    body: VerifyQRRequest,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(require_roles(*OFFICER_ROLES)),
 ):
@@ -341,6 +361,9 @@ async def verify_qr_token(
     logs the scan, and returns student info + collector session token for
     the officer's screen to display as a second QR.
     """
+    token = body.token
+    gate_lat = body.gate_lat
+    gate_lng = body.gate_lng
     today = today_str()
     now = datetime.utcnow()
 
@@ -542,7 +565,7 @@ async def get_all_students_status(
 @router.patch("/students/{student_id}/status")
 async def update_student_status(
     student_id: str,
-    arrival_status: ArrivalStatus,
+    body: UpdateArrivalStatusRequest,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(require_roles(
         UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN,
@@ -550,6 +573,7 @@ async def update_student_status(
     )),
 ):
     """Update a student's arrival status — used by officers and drivers"""
+    arrival_status = body.arrival_status
     result = await db.exec(
         select(StudentSecurityProfile).where(
             StudentSecurityProfile.student_id == student_id
@@ -772,7 +796,7 @@ async def add_parent_note(
 @router.post("/transport/{route_id}/dispatch")
 async def dispatch_route(
     route_id: str,
-    school_id: str,
+    body: SchoolScopedRequest,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(require_roles(*OFFICER_ROLES)),
 ):
@@ -780,6 +804,7 @@ async def dispatch_route(
     Dispatch a transport route — sets all enrolled students to en_route_bus
     and logs departure events.
     """
+    school_id = body.school_id
     result = await db.exec(
         select(StudentSecurityProfile).where(
             and_(
@@ -1054,7 +1079,7 @@ async def get_admin_overview(
 
 @router.post("/admin/reset-day")
 async def reset_daily_status(
-    school_id: str,
+    body: SchoolScopedRequest,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(require_roles(*ADMIN_ROLES)),
 ):
@@ -1062,6 +1087,7 @@ async def reset_daily_status(
     Reset all student arrival statuses to pending for a new school day.
     Call this each morning before QR generation.
     """
+    school_id = body.school_id
     result = await db.exec(
         select(StudentSecurityProfile).where(
             StudentSecurityProfile.school_id == school_id

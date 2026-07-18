@@ -1,7 +1,7 @@
 """Transport Management Router"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.encoders import jsonable_encoder
-from sqlmodel import select, func, and_
+from sqlmodel import select, func, and_, SQLModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +28,11 @@ from auth import get_current_user, require_roles
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/transport", tags=["Transport Management"])
+
+
+class VerifyDriverRequest(SQLModel):
+    verification_notes: str = ""
+
 
 
 # ============================================================================
@@ -1404,11 +1409,12 @@ async def update_driver(
 @router.put("/drivers/{driver_id}/verify", response_model=dict)
 async def verify_driver(
     driver_id: str,
-    verification_notes: str = "",
+    body: VerifyDriverRequest = VerifyDriverRequest(),
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
     """Verify a driver"""
+    verification_notes = body.verification_notes
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")

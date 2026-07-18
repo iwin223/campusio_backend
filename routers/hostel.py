@@ -1,7 +1,7 @@
 """Hostel Management Router"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.encoders import jsonable_encoder
-from sqlmodel import select, func, and_
+from sqlmodel import select, func, and_, SQLModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -27,6 +27,12 @@ from auth import get_current_user, require_roles
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/hostel", tags=["Hostel Management"])
+
+
+class UpdateComplaintRequest(SQLModel):
+    status: str
+    resolution_notes: Optional[str] = None
+
 
 
 # ============================================================================
@@ -1403,12 +1409,13 @@ async def get_hostel_complaints(
 @router.put("/complaints/{complaint_id}", response_model=dict)
 async def update_complaint(
     complaint_id: str,
-    status: str,
-    resolution_notes: Optional[str] = None,
+    body: UpdateComplaintRequest,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
     """Update complaint status"""
+    status = body.status
+    resolution_notes = body.resolution_notes
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
