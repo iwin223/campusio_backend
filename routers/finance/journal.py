@@ -70,7 +70,7 @@ async def _log_gl_audit(
             action=action,
             user_id=current_user.id,
             user_name=f"{current_user.first_name} {current_user.last_name}",
-            user_role=current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
+            user_role=current_user.role.value,
             old_values=old_values,
             new_values=new_values,
         )

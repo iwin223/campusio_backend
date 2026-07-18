@@ -103,18 +103,21 @@ async def get_current_user(
             if cached_user:
                 try:
                     user_dict = json.loads(cached_user)
-                    # Normalize role to lowercase value before reconstructing
-                    # (guards against stale cache with uppercase enum names)
+                    # Normalize role back to the UserRole ENUM INSTANCE, not a plain
+                    # string. table=True SQLModel constructors skip validation, so
+                    # whatever goes in here is exactly what every call site sees —
+                    # a string role would make `.value`/`.name` access crash downstream.
                     raw_role = user_dict.get("role")
-                    if raw_role:
+                    try:
+                        user_dict["role"] = UserRole(raw_role)
+                    except ValueError:
                         try:
-                            user_dict["role"] = UserRole(raw_role).value
-                        except ValueError:
-                            # Try by enum name (e.g. "SCHOOL_ADMIN" -> UserRole.SCHOOL_ADMIN)
-                            try:
-                                user_dict["role"] = UserRole[raw_role].value
-                            except KeyError:
-                                user_dict["role"] = None
+                            # Stale cache with uppercase enum NAME (e.g. "SCHOOL_ADMIN")
+                            user_dict["role"] = UserRole[raw_role]
+                        except (KeyError, TypeError):
+                            # Unrecognizable role: treat the cache entry as corrupt
+                            # and fall through to a fresh DB load.
+                            raise ValueError(f"Unrecognizable cached role: {raw_role!r}")
                     # Reconstruct User object from cached dict
                     user = User(**user_dict)
                     logger.debug(f"User {user_id} loaded from cache")
