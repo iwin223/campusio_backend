@@ -600,8 +600,18 @@ async def generate_report_card(
     present_days = sum(1 for a in attendance_records if a.status in [AttendanceStatus.PRESENT, AttendanceStatus.LATE])
     attendance_percentage = round(present_days / total_days * 100, 1) if total_days > 0 else 0
     
-    # Create report card
-    report_card = ReportCard(
+    # Create or update the report card for this student/term (upsert — this
+    # endpoint may be called more than once, e.g. remarks were edited and
+    # re-submitted before preview/download).
+    existing_result = await session.execute(
+        select(ReportCard).where(
+            ReportCard.student_id == student_id,
+            ReportCard.academic_term_id == academic_term_id
+        )
+    )
+    report_card = existing_result.scalars().first()
+
+    field_values = dict(
         school_id=school_id,
         student_id=student_id,
         class_id=student.class_id,
@@ -622,7 +632,14 @@ async def generate_report_card(
         promoted_to=body.promoted_to,
         generated_by=current_user.id
     )
-    session.add(report_card)
+
+    if report_card:
+        for field, value in field_values.items():
+            setattr(report_card, field, value)
+    else:
+        report_card = ReportCard(**field_values)
+        session.add(report_card)
+
     await session.commit()
     await session.refresh(report_card)
     
