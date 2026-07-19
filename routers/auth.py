@@ -1,17 +1,35 @@
 """Authentication router with integrated OTP support"""
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
 from sqlmodel import select, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
+from typing import Optional
 import csv
 import io
 import secrets
 import string
 from models.user import User, UserCreate, UserLogin, UserRole
+from services.audit_service import log_event
 
 
 class ChangePasswordRequest(SQLModel):
     new_password: str
+
+
+class BootstrapSuperAdminRequest(SQLModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    phone: Optional[str] = None
+
+
+class CreateAdminRequest(SQLModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    phone: Optional[str] = None
 from models.otp import (
     OTPVerificationRequest, OTPVerificationResponse, OTPSettings,
     OTPAdminSettings, OTPAdminSettingsRequest, OTPAdminSettingsResponse,
@@ -47,6 +65,7 @@ def _generate_password(length: int = 12) -> str:
 @router.post("/register", response_model=dict)
 async def register(
     user_data: UserCreate,
+    request: Request,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
@@ -101,6 +120,13 @@ async def register(
         user_id=user.id,
         is_enabled=is_mandatory,
         method="sms"
+    )
+
+    await log_event(
+        session, actor=current_user, action="user.created", entity_type="user",
+        entity_id=user.id, school_id=user.school_id,
+        summary=f"{current_user.email} created a {user.role.value if hasattr(user.role, 'value') else user.role} account: {user.email}",
+        ip_address=request.client.host if request.client else None,
     )
 
     return {
@@ -462,6 +488,139 @@ async def change_password(
     return {"message": "Password changed successfully"}
 
 
+@router.post("/bootstrap-superadmin", response_model=dict)
+async def bootstrap_superadmin(
+    body: BootstrapSuperAdminRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session)
+):
+    """Create the very first super admin account. No authentication required
+    to call this — there's nobody to authenticate as yet on a fresh deploy.
+
+    Self-locking: this endpoint works exactly once, ever. As soon as any
+    super_admin account exists in the database, every subsequent call 403s
+    permanently. There is no way to re-open it short of deleting every
+    super_admin row directly in the database.
+    """
+    existing = await session.execute(select(User).where(User.role == UserRole.SUPER_ADMIN))
+    if existing.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A super admin already exists. This endpoint only works once, on a fresh deploy with no super admin yet."
+        )
+
+    email_taken = await session.execute(select(User).where(User.email == body.email))
+    if email_taken.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already in use")
+
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    user = User(
+        email=body.email,
+        password_hash=get_password_hash(body.password),
+        first_name=body.first_name,
+        last_name=body.last_name,
+        phone=body.phone,
+        role=UserRole.SUPER_ADMIN,
+        school_id=None,
+        must_change_password=False,
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    await log_event(
+        session, actor=user, action="user.bootstrap_superadmin", entity_type="user",
+        entity_id=user.id, summary=f"First super admin account created via bootstrap endpoint: {user.email}",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return {
+        "message": "Super admin created. This endpoint is now permanently locked.",
+        "id": user.id,
+        "email": user.email,
+    }
+
+
+@router.post("/create-admin", response_model=dict)
+async def create_admin(
+    body: CreateAdminRequest,
+    request: Request,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Create an additional super admin account. Super admin only — this is
+    the authenticated counterpart to /bootstrap-superadmin, used any time
+    after the first account exists."""
+    email_taken = await session.execute(select(User).where(User.email == body.email))
+    if email_taken.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already in use")
+
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    user = User(
+        email=body.email,
+        password_hash=get_password_hash(body.password),
+        first_name=body.first_name,
+        last_name=body.last_name,
+        phone=body.phone,
+        role=UserRole.SUPER_ADMIN,
+        school_id=None,
+        must_change_password=True,
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    await log_event(
+        session, actor=current_user, action="user.created_admin", entity_type="user",
+        entity_id=user.id, summary=f"{current_user.email} created a new super admin account: {user.email}",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return {"message": "Super admin account created", "id": user.id, "email": user.email}
+
+
+@router.delete("/users/{user_id}", response_model=dict)
+async def delete_user(
+    user_id: str,
+    request: Request,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Remove a user account. Super admin only. This is a soft delete —
+    the row and its history stay (other tables reference user_id as a plain
+    string field with no DB-level cascade, so a hard delete would silently
+    orphan records across the app). The account is deactivated and its email
+    is released (prefixed) so the address can be reused for a new account."""
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot remove your own account")
+
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    old_email = user.email
+    user.is_active = False
+    user.email = f"deleted-{int(datetime.utcnow().timestamp())}-{old_email}"
+    user.updated_at = datetime.utcnow()
+    session.add(user)
+    await session.commit()
+
+    await log_event(
+        session, actor=current_user, action="user.deleted", entity_type="user",
+        entity_id=user_id, school_id=user.school_id,
+        summary=f"{current_user.email} removed account: {old_email} ({user.role.value if hasattr(user.role, 'value') else user.role})",
+        old_values={"email": old_email, "is_active": True},
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return {"message": f"Account {old_email} removed"}
+
+
 @router.get("/users", response_model=list[dict])
 async def list_users(
     school_id: str = None,
@@ -505,6 +664,7 @@ async def list_users(
 async def update_user_status(
     user_id: str,
     body: UpdateUserStatusRequest,
+    request: Request,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
@@ -512,18 +672,27 @@ async def update_user_status(
     """Enable/disable user account"""
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if current_user.role == UserRole.SCHOOL_ADMIN and user.school_id != current_user.school_id:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
+    was_active = user.is_active
     user.is_active = is_active
     user.updated_at = datetime.utcnow()
     session.add(user)
     await session.commit()
-    
+
+    await log_event(
+        session, actor=current_user, action="user.status_changed", entity_type="user",
+        entity_id=user_id, school_id=user.school_id,
+        summary=f"{current_user.email} {'enabled' if is_active else 'disabled'} account: {user.email}",
+        old_values={"is_active": was_active}, new_values={"is_active": is_active},
+        ip_address=request.client.host if request.client else None,
+    )
+
     return {"message": f"User {'enabled' if is_active else 'disabled'} successfully"}
 
 

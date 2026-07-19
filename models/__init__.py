@@ -78,6 +78,7 @@ from models.payment import (
     TransactionStatus, PaymentGateway, TransactionType
 )
 from models.ai_settings import AIProvider, SchoolAISettings, AISettingsResponse, UpdateAISettingsRequest
+from models.audit import SystemAuditLog, SystemAuditLogResponse
 
 __all__ = [
     "User", "UserCreate", "UserLogin", "UserResponse", "UserRole",

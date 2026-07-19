@@ -1,6 +1,6 @@
 """Schools router"""
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlmodel import select
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from database import get_session
 from auth import get_current_user, require_roles
 from services.coa_initialization import seed_default_chart_of_accounts
 from services.fiscal_period_initialization import seed_default_fiscal_periods
+from services.audit_service import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/schools", tags=["Schools"])
 @router.post("", response_model=dict)
 async def create_school(
     school_data: SchoolCreate,
+    request: Request,
     current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN)),
     session: AsyncSession = Depends(get_session)
 ):
@@ -70,6 +72,13 @@ async def create_school(
             logger.warning(f"Fiscal period seeding had failures for new school {response['id']}: {period_result['errors']}")
     except Exception as e:
         logger.error(f"Failed to seed default fiscal periods for new school {response['id']}: {e}")
+
+    await log_event(
+        session, actor=current_user, action="school.created", entity_type="school",
+        entity_id=response["id"], school_id=response["id"],
+        summary=f"{current_user.email} created school: {school.name} ({school.code})",
+        ip_address=request.client.host if request.client else None,
+    )
 
     return response
 
@@ -185,6 +194,102 @@ async def get_school(
         "enable_hostel": school.enable_hostel,
         "created_at": school.created_at.isoformat()
     }
+
+
+@router.get("/{school_id}/detail", response_model=dict)
+async def get_school_detail(
+    school_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """School info plus every user account at that school, with roles.
+    Super admin can view any school; a school admin can only view their own."""
+    if current_user.role != UserRole.SUPER_ADMIN and current_user.school_id != school_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    result = await session.execute(select(School).where(School.id == school_id))
+    school = result.scalar_one_or_none()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    users_result = await session.execute(
+        select(User).where(User.school_id == school_id).order_by(User.role, User.first_name)
+    )
+    users = users_result.scalars().all()
+
+    role_counts: dict[str, int] = {}
+    for u in users:
+        role_value = u.role.value if hasattr(u.role, "value") else str(u.role)
+        role_counts[role_value] = role_counts.get(role_value, 0) + 1
+
+    return {
+        "school": {
+            "id": school.id,
+            "name": school.name,
+            "code": school.code,
+            "school_type": school.school_type,
+            "address": school.address,
+            "city": school.city,
+            "region": school.region,
+            "phone": school.phone,
+            "email": school.email,
+            "motto": school.motto,
+            "is_active": school.is_active,
+            "enable_hostel": school.enable_hostel,
+            "created_at": school.created_at.isoformat(),
+        },
+        "role_counts": role_counts,
+        "users": [
+            {
+                "id": u.id,
+                "email": u.email,
+                "first_name": u.first_name,
+                "last_name": u.last_name,
+                "phone": u.phone,
+                "role": u.role.value if hasattr(u.role, "value") else str(u.role),
+                "is_active": u.is_active,
+                "created_at": u.created_at.isoformat(),
+                "last_login": u.last_login.isoformat() if u.last_login else None,
+            }
+            for u in users
+        ],
+    }
+
+
+@router.delete("/{school_id}", response_model=dict)
+async def delete_school(
+    school_id: str,
+    request: Request,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Remove a school. Super admin only. This is a soft delete (is_active=False)
+    — the school and every record referencing it (students, staff, fees,
+    grades, ...) stay in place, since there's no DB-level cascade to safely
+    hard-delete against. A deactivated school disappears from active lists
+    but its historical data remains intact."""
+    result = await session.execute(select(School).where(School.id == school_id))
+    school = result.scalar_one_or_none()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    if not school.is_active:
+        raise HTTPException(status_code=400, detail="School is already removed")
+
+    school.is_active = False
+    school.updated_at = datetime.utcnow()
+    session.add(school)
+    await session.commit()
+
+    await log_event(
+        session, actor=current_user, action="school.deleted", entity_type="school",
+        entity_id=school_id, school_id=school_id,
+        summary=f"{current_user.email} removed school: {school.name} ({school.code})",
+        old_values={"is_active": True},
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return {"message": f"School {school.name} removed"}
 
 
 # Academic Terms

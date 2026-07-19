@@ -68,6 +68,7 @@ async def register_routers(app: FastAPI):
     from routers.account_hierarchy_router import router as hierarchy_router
     from routers.payments import router as payments_router
     from routers.ai_settings import router as ai_settings_router
+    from routers.system_audit import router as system_audit_router
     from routers.teacher.grades import router as teacher_grades_router
     from routers.teacher.attendance import router as teacher_attendance_router
     from routers.teacher.timetable import router as teacher_timetable_router
@@ -114,6 +115,7 @@ async def register_routers(app: FastAPI):
     app.include_router(hierarchy_router, prefix="/api", tags=["Accounting Compliance"])
     app.include_router(payments_router, prefix="/api")
     app.include_router(ai_settings_router, prefix="/api", tags=["AI Settings"])
+    app.include_router(system_audit_router, prefix="/api", tags=["System Audit"])
     app.include_router(settlements_router, prefix="/api")
     app.include_router(teacher_grades_router, prefix="/api")
     app.include_router(teacher_attendance_router, prefix="/api")
