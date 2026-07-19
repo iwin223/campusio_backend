@@ -20,6 +20,7 @@ from models.user import User, UserRole
 from models.report_template import ReportTemplate
 from database import get_session
 from auth import get_current_user, require_roles
+from services.audit_service import log_event
 from services.report_card_pdf_service import ReportCardPDFService
 
 router = APIRouter(prefix="/grades", tags=["Grades & Report Cards"])
@@ -192,10 +193,18 @@ async def delete_grade(
     
     if current_user.role != UserRole.SUPER_ADMIN and current_user.school_id != grade.school_id:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
+    deleted_summary = {"student_id": grade.student_id, "subject_id": grade.subject_id, "score": grade.score, "max_score": grade.max_score}
     await session.delete(grade)
     await session.commit()
-    
+
+    await log_event(
+        session, actor=current_user, action="grade.deleted", entity_type="grade",
+        entity_id=grade_id, school_id=grade.school_id,
+        summary=f"{current_user.email} deleted a grade for student {grade.student_id}",
+        old_values=deleted_summary,
+    )
+
     return {"message": "Grade deleted successfully"}
 
 
@@ -642,7 +651,13 @@ async def generate_report_card(
 
     await session.commit()
     await session.refresh(report_card)
-    
+
+    await log_event(
+        session, actor=current_user, action="grade.report_card_generated", entity_type="report_card",
+        entity_id=report_card.id, school_id=school_id,
+        summary=f"{current_user.email} generated a report card for student {student_id}",
+    )
+
     return {
         "id": report_card.id,
         "student_id": student_id,

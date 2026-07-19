@@ -10,6 +10,7 @@ from models.classroom import Class
 from models.user import User, UserRole
 from database import get_session
 from auth import get_current_user, require_roles
+from services.audit_service import log_event
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
@@ -291,10 +292,18 @@ async def update_attendance(
     if current_user.role not in [UserRole.SUPER_ADMIN] and current_user.school_id != attendance.school_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
+    old_status = attendance.status
     attendance.status = status
     attendance.remarks = remarks
     attendance.updated_at = datetime.utcnow()
     session.add(attendance)
     await session.commit()
-    
+
+    await log_event(
+        session, actor=current_user, action="attendance.corrected", entity_type="attendance",
+        entity_id=attendance_id, school_id=attendance.school_id,
+        summary=f"{current_user.email} changed an attendance record for student {attendance.student_id} from {old_status} to {status}",
+        old_values={"status": old_status}, new_values={"status": status},
+    )
+
     return {"message": "Attendance updated"}

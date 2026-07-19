@@ -17,6 +17,7 @@ from models.finance import (
 from models.finance.chart_of_accounts import GLAccount
 from database import get_session
 from auth import get_current_user, require_roles
+from services.audit_service import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,14 @@ async def create_fee_structure(
     session.add(structure)
     await session.commit()
     await session.refresh(structure)
-    
+
+    await log_event(
+        session, actor=current_user, action="fee.structure_created", entity_type="fee_structure",
+        entity_id=structure.id, school_id=school_id,
+        summary=f"{current_user.email} created a {structure.fee_type} fee structure of GHS {structure.amount:.2f} for {structure.class_level}",
+        new_values={"fee_type": structure.fee_type, "class_level": structure.class_level, "amount": structure.amount},
+    )
+
     return {
         "id": structure.id,
         "academic_term_id": structure.academic_term_id,
@@ -484,7 +492,14 @@ async def record_payment(
     
     await session.commit()
     await session.refresh(primary_payment)
-    
+
+    await log_event(
+        session, actor=current_user, action="fee.payment_recorded", entity_type="fee_payment",
+        entity_id=primary_payment.id, school_id=school_id,
+        summary=f"{current_user.email} recorded a payment of GHS {payment_amount:.2f} for student {student_id} (receipt {receipt_number})",
+        new_values={"amount": payment_amount, "fee_id": payment_data.fee_id, "receipt_number": receipt_number},
+    )
+
     response = {
         "id": primary_payment.id,
         "receipt_number": receipt_number,
