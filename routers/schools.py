@@ -1,7 +1,7 @@
 """Schools router"""
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from sqlmodel import select
+from sqlmodel import select, SQLModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
@@ -290,6 +290,54 @@ async def delete_school(
     )
 
     return {"message": f"School {school.name} removed"}
+
+
+class UpdateSchoolAccessRequest(SQLModel):
+    suspended: bool
+    reason: Optional[str] = None
+
+
+@router.put("/{school_id}/access", response_model=dict)
+async def update_school_access(
+    school_id: str,
+    body: UpdateSchoolAccessRequest,
+    request: Request,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Suspend or restore a school's access to every module (billing enforcement).
+    Enforced centrally in auth.py::get_current_user — every non-super-admin
+    request for this school's users gets blocked while suspended is True."""
+    result = await session.execute(select(School).where(School.id == school_id))
+    school = result.scalar_one_or_none()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    was_suspended = school.access_suspended
+    school.access_suspended = body.suspended
+    school.access_suspended_reason = body.reason if body.suspended else None
+    school.access_suspended_at = datetime.utcnow() if body.suspended else None
+    school.updated_at = datetime.utcnow()
+    session.add(school)
+    await session.commit()
+
+    action = "school.access_suspended" if body.suspended else "school.access_restored"
+    summary = (
+        f"{current_user.email} suspended access for {school.name} ({school.code})"
+        + (f" — {body.reason}" if body.reason else "")
+    ) if body.suspended else f"{current_user.email} restored access for {school.name} ({school.code})"
+
+    await log_event(
+        session, actor=current_user, action=action, entity_type="school",
+        entity_id=school_id, school_id=school_id, summary=summary,
+        old_values={"access_suspended": was_suspended}, new_values={"access_suspended": body.suspended},
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return {
+        "message": f"School {school.name} access {'suspended' if body.suspended else 'restored'}",
+        "access_suspended": school.access_suspended,
+    }
 
 
 # Academic Terms

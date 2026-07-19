@@ -30,6 +30,13 @@ class School(SQLModel, table=True):
     # Feature toggles — boarding is an SHS phenomenon, so the hostel module is
     # OFF by default for new Basic/JHS schools and enabled per school when needed.
     enable_hostel: bool = False
+    # Billing enforcement — a super admin's manual "cut off access" switch,
+    # deliberately separate from is_active (which means "school removed").
+    # Enforced centrally in auth.py::get_current_user for every non-super-admin
+    # request against this school.
+    access_suspended: bool = False
+    access_suspended_reason: Optional[str] = None
+    access_suspended_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

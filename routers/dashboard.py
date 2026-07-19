@@ -349,6 +349,7 @@ async def get_super_admin_oversight(
             "city": school.city if school.city else None,
             "region": school.region if school.region else None,
             "is_active": school.is_active,
+            "access_suspended": school.access_suspended,
             "created_at": school.created_at.isoformat(),
             "students": students,
             "staff": staff,

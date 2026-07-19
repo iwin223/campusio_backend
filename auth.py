@@ -11,6 +11,7 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as redis
 from models.user import User, UserRole
+from models.school import School
 from database import get_session
 from config import get_settings
 
@@ -158,7 +159,25 @@ async def get_current_user(
     
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
-    
+
+    # Billing enforcement — a super admin's manual "cut off access" switch.
+    # Deliberately NOT cached (unlike the user object above): this is a
+    # security boundary, and stale "still allowed" reads are exactly the
+    # kind of bug caching would introduce here. It's one lightweight
+    # indexed-by-primary-key lookup, only for non-super-admin school users.
+    if user.role != UserRole.SUPER_ADMIN and user.school_id:
+        school_result = await session.execute(
+            select(School.access_suspended, School.access_suspended_reason).where(School.id == user.school_id)
+        )
+        school_row = school_result.first()
+        if school_row and school_row[0]:
+            reason = school_row[1]
+            detail = "Your school's access has been suspended by the platform administrator."
+            if reason:
+                detail += f" Reason: {reason}."
+            detail += " Contact your school administrator."
+            raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=detail)
+
     return user
 
 
