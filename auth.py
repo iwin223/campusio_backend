@@ -171,11 +171,13 @@ async def get_current_user(
         )
         school_row = school_result.first()
         if school_row and school_row[0]:
-            reason = school_row[1]
-            detail = "Your school's access has been suspended by the platform administrator."
+            reason = (school_row[1] or "").strip()
+            detail = "All modules are unavailable for your school until the outstanding payment is made."
             if reason:
-                detail += f" Reason: {reason}."
-            detail += " Contact your school administrator."
+                if reason[-1] not in ".!?":
+                    reason += "."
+                detail += f" {reason}"
+            detail += " Contact your school administrator or Campusio support to resolve this."
             raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=detail)
 
     return user
