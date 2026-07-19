@@ -77,6 +77,7 @@ from models.payment import (
     OnlineTransaction, OnlineTransactionRead, PaymentVerification,
     TransactionStatus, PaymentGateway, TransactionType
 )
+from models.ai_settings import AIProvider, SchoolAISettings, AISettingsResponse, UpdateAISettingsRequest
 
 __all__ = [
     "User", "UserCreate", "UserLogin", "UserResponse", "UserRole",

@@ -869,6 +869,161 @@ async def preview_report_card_html(
     }
 
 
+async def _compute_report_preview_data(
+    student_id: str, academic_term_id: str, current_user: User, session: AsyncSession,
+):
+    """Read-only version of preview_report_card_html's data computation —
+    same access control and same stats, but never writes a ReportCard row.
+    Used by the free and AI remarks-suggestion endpoints below."""
+    student_result = await session.execute(select(Student).where(Student.id == student_id))
+    student = student_result.scalar_one_or_none()
+
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    try:
+        # Check access control based on user role
+        has_access = False
+
+        if current_user.role == UserRole.SUPER_ADMIN or current_user.role == UserRole.SCHOOL_ADMIN:
+            # Admins can view any student in their school
+            has_access = current_user.school_id == student.school_id
+        elif current_user.role == UserRole.TEACHER:
+            # Teachers can view students they teach
+            has_access = current_user.school_id == student.school_id
+        elif current_user.role == UserRole.PARENT:
+            # Parents can only view their own children
+            parent_result = await session.execute(
+                select(Parent).where(Parent.user_id == current_user.id)
+            )
+            parent = parent_result.scalar_one_or_none()
+
+            if parent:
+                student_parent_result = await session.execute(
+                    select(StudentParent).where(
+                        StudentParent.parent_id == parent.id,
+                        StudentParent.student_id == student_id
+                    )
+                )
+                has_access = student_parent_result.scalar_one_or_none() is not None
+        elif current_user.role == UserRole.STUDENT:
+            # Students can only view their own report card
+            has_access = current_user.id == student.user_id
+
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Access control error in _compute_report_preview_data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Access control error: {str(e)}")
+
+    grades_result = await session.execute(
+        select(Grade).where(
+            Grade.student_id == student_id,
+            Grade.academic_term_id == academic_term_id
+        )
+    )
+    grades = grades_result.scalars().all()
+
+    attendance_result = await session.execute(
+        select(Attendance).where(Attendance.student_id == student_id)
+    )
+    attendance_records = attendance_result.scalars().all()
+    total_days = len(attendance_records)
+    present_days = sum(1 for a in attendance_records if a.status in [AttendanceStatus.PRESENT, AttendanceStatus.LATE])
+    attendance_percentage = round(present_days / total_days * 100, 1) if total_days > 0 else 0
+
+    subject_ids = list(set(g.subject_id for g in grades))
+    subject_result = await session.execute(select(Subject).where(Subject.id.in_(subject_ids)))
+    subjects = {s.id: s for s in subject_result.scalars().all()}
+
+    class_name = "Not Assigned"
+    if student.class_id:
+        class_result = await session.execute(select(Class).where(Class.id == student.class_id))
+        class_obj = class_result.scalar_one_or_none()
+        if class_obj:
+            class_name = class_obj.name
+
+    school_result = await session.execute(select(School).where(School.id == student.school_id))
+    school = school_result.scalar_one_or_none()
+    school_name = school.name if school else "School Name"
+
+    student_data = {
+        "id": student.id, "student_id": student.student_id,
+        "first_name": student.first_name, "last_name": student.last_name,
+        "school_id": student.school_id, "class_id": student.class_id,
+        "class_name": class_name, "school_name": school_name,
+    }
+    # A plain dict works here because ReportCardPDFService.format_grade_data's
+    # get_value() helper supports dict OR attribute access — no DB row needed.
+    report_card_stub = {"attendance_percentage": attendance_percentage}
+
+    report_data = ReportCardPDFService.format_grade_data(
+        report_card=report_card_stub, grades=grades, subjects_map=subjects,
+        student=student_data, academic_term_name=None,
+    )
+    return student, report_data
+
+
+@router.get("/report-cards/{student_id}/{academic_term_id}/suggest-remarks")
+async def suggest_report_card_remarks(
+    student_id: str,
+    academic_term_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Free, rule-based remarks suggestion. Always available, no external cost."""
+    student, report_data = await _compute_report_preview_data(student_id, academic_term_id, current_user, session)
+    from services.comment_generator_service import generate_template_remarks
+    suggestion = generate_template_remarks(student.first_name, report_data)
+    return {
+        **suggestion,
+        "overall_average": report_data.get("overall_average"),
+        "overall_grade": report_data.get("overall_grade"),
+        "attendance_display": report_data.get("attendance_display"),
+    }
+
+
+@router.post("/report-cards/{student_id}/{academic_term_id}/ai-suggest-remarks")
+async def ai_suggest_report_card_remarks(
+    student_id: str,
+    academic_term_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Optional BYOK AI remarks. Requires the school to have configured its own
+    provider API key via /api/ai-settings; otherwise returns a clear 400 telling
+    the caller to use the free suggestion instead."""
+    student, report_data = await _compute_report_preview_data(student_id, academic_term_id, current_user, session)
+
+    from models.ai_settings import SchoolAISettings
+    from services.ai_key_crypto import decrypt_api_key
+    from services.ai_comment_service import generate_ai_remarks, AIProviderError
+
+    settings_result = await session.execute(
+        select(SchoolAISettings).where(SchoolAISettings.school_id == student.school_id)
+    )
+    ai_settings = settings_result.scalar_one_or_none()
+    if not ai_settings or not ai_settings.enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="AI comment generation is not configured for this school. "
+                   "Ask your school admin to add an API key in Settings, or use the free suggested remarks instead."
+        )
+
+    try:
+        api_key = decrypt_api_key(ai_settings.api_key_encrypted)
+        suggestion = await generate_ai_remarks(
+            provider=ai_settings.provider, api_key=api_key, model=ai_settings.model,
+            student_first_name=student.first_name, report_data=report_data,
+        )
+    except AIProviderError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return suggestion
+
+
 @router.get("/report-cards/{student_id}/{academic_term_id}/download")
 async def download_report_card_pdf(
     student_id: str,
