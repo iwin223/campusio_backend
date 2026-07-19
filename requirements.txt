@@ -44,6 +44,9 @@ requests==2.32.5
 # Deployment
 gunicorn==21.2.0
 
+# Error monitoring (optional — inert until SENTRY_DSN is set)
+sentry-sdk[fastapi]==2.66.0
+
 # Utilities
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3

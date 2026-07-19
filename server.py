@@ -147,6 +147,18 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown complete")
 
 
+# Error monitoring — entirely optional. Inert until SENTRY_DSN is set (see
+# .env.example); no account, no cost, no behavior change without it.
+_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
+if _sentry_dsn:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+        traces_sample_rate=float(os.environ.get("SENTRY_SAMPLE_RATE", "0.1")),
+    )
+    logger.info("Sentry error monitoring enabled")
+
 # Create FastAPI app
 app = FastAPI(
     title="School ERP System",
