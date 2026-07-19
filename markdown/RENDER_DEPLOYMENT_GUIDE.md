@@ -331,6 +331,88 @@ Expected logs:
 
 ---
 
+## Error Monitoring (Sentry)
+
+`sentry-sdk[fastapi]` is installed and wired into `server.py` (backend) and
+`src/index.js` (frontend), but both are entirely inert until a DSN is set —
+no account means no behavior change and no cost.
+
+To turn it on:
+
+1. Create a free Sentry account at https://sentry.io (or use an existing
+   org). The free tier covers small-to-medium error volume; no card
+   required to start.
+2. Create two projects: one Python/FastAPI, one React. Each gives you a DSN.
+3. In the Render dashboard, add to the backend web service's environment:
+   - `SENTRY_DSN` — the FastAPI project's DSN
+   - `SENTRY_ENVIRONMENT` — `production`
+   - `SENTRY_SAMPLE_RATE` — `0.1` (10% of requests traced; raise for more detail, at more Sentry-side event volume)
+4. For the frontend, set at build time (Render static site / build environment):
+   - `REACT_APP_SENTRY_DSN` — the React project's DSN
+   - `REACT_APP_SENTRY_ENVIRONMENT` — `production`
+   - `REACT_APP_SENTRY_SAMPLE_RATE` — `0.1`
+5. Redeploy both services. Trigger a throwaway error (e.g. hit a route with
+   a bad ID) and confirm it shows up in the Sentry dashboard within a
+   minute or two.
+
+Leave the DSNs unset in any environment where you don't want error
+reporting (e.g. local dev) — no code changes needed either way.
+
+---
+
+## Backups & Disaster Recovery
+
+**What Render gives you automatically:** on the Starter tier and above,
+Render's managed PostgreSQL takes automated daily backups with point-in-time
+recovery (retention window depends on plan — check the current retention
+period for your plan on Render's pricing page, since it changes over time).
+The **Free** Postgres tier does not get this — free instances also expire
+after a fixed period, so a school's real data should never sit on the free
+tier past initial testing.
+
+**This has not been verified against your actual Render account** — nobody
+running this session has dashboard access. Before trusting backups are
+running, whoever holds the Render account needs to:
+
+1. **Confirm the Postgres plan.** In the Render dashboard → your Postgres
+   instance → check the plan name. If it says "Free", upgrade before any
+   real school data goes on it.
+2. **Confirm backups are listed.** Postgres instance → "Backups" tab. You
+   should see a growing list of daily snapshots. If the tab is empty after
+   24+ hours on a paid plan, something's wrong — contact Render support.
+3. **Actually test a restore, at least once, before you need it.** From
+   the "Backups" tab, use "Restore" (or "Create database from backup") to
+   spin up a **new**, separate Postgres instance from a recent snapshot —
+   this does not touch the live database. Point a local `psql` or a
+   throwaway backend instance at the restored instance's connection string
+   and confirm:
+   - `SELECT count(*) FROM users;` and a couple of other core tables return
+     sane numbers
+   - Data looks recent (check a `created_at` on a recently-touched row)
+   - Delete the restored instance once you're satisfied — it's a second
+     paid Postgres instance for as long as it exists.
+4. **Repeat the restore test periodically** (e.g. quarterly), not just once
+   at setup — schema changes over time and an old restore process can
+   silently stop working.
+
+**Manual off-Render backup (extra safety net, optional):** Render's backups
+live inside Render. For an offsite copy, run from anywhere with network
+access to the database:
+
+```bash
+pg_dump "$DATABASE_URL" --format=custom --file="campusio_$(date +%Y%m%d).dump"
+```
+
+This produces a single portable file restorable with `pg_restore`. Where you
+store it (S3, Backblaze, even a local encrypted drive) is a call for whoever
+owns the account — this repo has no object-storage credentials configured,
+so nothing here uploads it anywhere automatically. If you want this
+automated, Render supports scheduled "Cron Job" services that could run this
+command and push the result somewhere, but that requires deciding on and
+provisioning a storage destination first.
+
+---
+
 ## 🛠️ Environment Variables Reference
 
 | Variable | Value | Required |
@@ -344,6 +426,9 @@ Expected logs:
 | `USMS_TOKEN` | USMS token (optional) | No |
 | `TWILIO_ACCOUNT_SID` | Twilio SID (optional) | No |
 | `TWILIO_AUTH_TOKEN` | Twilio token (optional) | No |
+| `SENTRY_DSN` | Sentry project DSN (optional, see Error Monitoring above) | No |
+| `SENTRY_ENVIRONMENT` | `production` (optional) | No |
+| `SENTRY_SAMPLE_RATE` | `0.1` (optional) | No |
 
 ---
 
