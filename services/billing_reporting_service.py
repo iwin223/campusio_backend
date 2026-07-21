@@ -1,4 +1,5 @@
 """Billing reporting and analytics service (Phase 2)"""
+import ast
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -10,7 +11,8 @@ from models.billing import (
     PlatformSubscription, SubscriptionInvoice, LateFeeCharge, DiscountRule,
     BillingReport, SubscriptionStatus
 )
-from models.payment import OnlineTransaction, TransactionStatus
+from models.payment import OnlineTransaction, TransactionStatus, TransactionType
+from services.platform_billing_service import subscription_outstanding
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +59,12 @@ class BillingReportingService:
                 1 for s in subscriptions 
                 if s.due_date <= now and s.status != SubscriptionStatus.CANCELLED
             )
+            # subscription_outstanding() includes late fees — final_amount_due
+            # alone doesn't, so overdue amounts were understated by exactly
+            # whatever late fee had accrued (same bug class fixed elsewhere
+            # this session in suspension checks and reminder messages).
             overdue_amount = sum(
-                (s.final_amount_due - s.amount_paid)
+                subscription_outstanding(s)
                 for s in subscriptions
                 if s.due_date <= now and s.status != SubscriptionStatus.CANCELLED
             )
@@ -79,18 +85,36 @@ class BillingReportingService:
             card_payment = 0
             other_payment = 0
             
-            # Get transaction details for payment method analysis
-            txn_result = await session.execute(
-                select(OnlineTransaction).where(
-                    OnlineTransaction.status == TransactionStatus.SUCCESSFUL
-                )
+            # Get transaction details for payment method analysis. This
+            # previously crashed unconditionally: TransactionStatus.SUCCESSFUL
+            # doesn't exist (the real member is SUCCESS) and
+            # OnlineTransaction has no payment_method column, so the whole
+            # revenue report failed before either bug could even be reached.
+            txn_query = select(OnlineTransaction).where(
+                OnlineTransaction.status == TransactionStatus.SUCCESS,
+                OnlineTransaction.transaction_type == TransactionType.SUBSCRIPTION,
             )
+            if school_id:
+                txn_query = txn_query.where(OnlineTransaction.school_id == school_id)
+            txn_result = await session.execute(txn_query)
             transactions = txn_result.scalars().all()
-            
+
+            # There's no dedicated payment-channel column; best-effort parse
+            # Paystack's "channel" out of the raw gateway_response (stored as
+            # a Python dict repr via str(), not JSON — ast.literal_eval reads
+            # that safely). Falls back to "other" if unavailable/unparsable.
             for txn in transactions:
-                if txn.payment_method == "mobile_money":
+                channel = None
+                if txn.gateway_response:
+                    try:
+                        parsed = ast.literal_eval(txn.gateway_response)
+                        if isinstance(parsed, dict):
+                            channel = parsed.get("channel")
+                    except (ValueError, SyntaxError):
+                        pass
+                if channel == "mobile_money":
                     mobile_money += 1
-                elif txn.payment_method == "card":
+                elif channel == "card":
                     card_payment += 1
                 else:
                     other_payment += 1
@@ -179,8 +203,8 @@ class BillingReportingService:
             }
             
             for sub in subscriptions:
-                outstanding = sub.final_amount_due - sub.amount_paid
-                
+                outstanding = subscription_outstanding(sub)
+
                 if outstanding <= 0:
                     continue
                 
@@ -310,9 +334,7 @@ class BillingReportingService:
                 school_stats[sub.school_id]["late_fees"] += sub.late_fee_amount
                 
                 if sub.due_date <= datetime.utcnow():
-                    school_stats[sub.school_id]["overdue"] += (
-                        sub.final_amount_due - sub.amount_paid
-                    )
+                    school_stats[sub.school_id]["overdue"] += subscription_outstanding(sub)
             
             # Calculate rates and sort
             schools = []
