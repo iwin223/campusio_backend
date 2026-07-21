@@ -198,13 +198,13 @@ async def generate_term_subscription(
     """
     
     # Verify authorization
-    if current_user.role not in [UserRole.ADMIN, UserRole.SCHOOL]:
+    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins or school users can generate subscriptions"
         )
     
-    if current_user.role == UserRole.SCHOOL:
+    if current_user.role == UserRole.SCHOOL_ADMIN:
         school_id = current_user.school_id
     else:
         # Admin must be with a school
@@ -305,7 +305,7 @@ async def get_subscription(
         )
     
     # Verify access
-    if current_user.role == UserRole.SCHOOL and subscription.school_id != current_user.school_id:
+    if current_user.role == UserRole.SCHOOL_ADMIN and subscription.school_id != current_user.school_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
@@ -791,7 +791,7 @@ async def apply_late_fees(
     """
     
     # Admin only
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can apply late fees"
@@ -832,7 +832,7 @@ async def waive_late_fee(
     reason = body.reason
     
     # Admin or school admin
-    if current_user.role not in [UserRole.ADMIN, UserRole.SCHOOL]:
+    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized"
@@ -872,7 +872,7 @@ async def check_and_suspend_overdue(
     ```
     """
     
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
@@ -914,7 +914,7 @@ async def suspend_subscription(
     ```
     """
     
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
@@ -957,7 +957,7 @@ async def reactivate_subscription(
     """
     verify_payment = body.verify_payment
     
-    if current_user.role not in [UserRole.ADMIN, UserRole.SCHOOL]:
+    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin or school access required"
@@ -977,7 +977,7 @@ async def reactivate_subscription(
             detail="Subscription not found"
         )
     
-    if current_user.role == UserRole.SCHOOL and sub.school_id != current_user.school_id:
+    if current_user.role == UserRole.SCHOOL_ADMIN and sub.school_id != current_user.school_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
@@ -1014,7 +1014,7 @@ async def get_suspended_subscriptions(
     ```
     """
     
-    if current_user.role == UserRole.SCHOOL and not current_user.school_id:
+    if current_user.role == UserRole.SCHOOL_ADMIN and not current_user.school_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User must be associated with a school"
@@ -1024,7 +1024,7 @@ async def get_suspended_subscriptions(
     
     service = SubscriptionSuspensionService()
     
-    school_id = current_user.school_id if current_user.role == UserRole.SCHOOL else None
+    school_id = current_user.school_id if current_user.role == UserRole.SCHOOL_ADMIN else None
     
     suspended = await service.get_suspended_subscriptions(
         session=session,
@@ -1066,7 +1066,7 @@ async def send_pending_reminders(
     """
     school_id = body.school_id
     
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
@@ -1156,7 +1156,7 @@ async def create_discount_rule(
     max_students = body.max_students
     description = body.description
     
-    if current_user.role not in [UserRole.ADMIN, UserRole.SCHOOL]:
+    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins or school users can create discount rules"
@@ -1228,46 +1228,12 @@ async def list_discount_rules(
 
 
 # --- REMINDER ENDPOINTS ---
-
-@router.post("/reminders/send-pending", status_code=200)
-async def send_pending_reminders(
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
-) -> dict:
-    """
-    Send pending payment reminders (Admin only)
-    
-    **Auth Required:** Admin
-    
-    **Response:**
-    ```json
-    {
-        "success": true,
-        "reminders_sent": 12,
-        "message": "Sent 12 payment reminders"
-    }
-    ```
-    """
-    
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can send reminders"
-        )
-    
-    from services.payment_reminder_service import PaymentReminderService
-    
-    service = PaymentReminderService()
-    result = await service.send_pending_reminders(
-        session=session,
-        school_id=current_user.school_id if current_user.school_id else None
-    )
-    
-    return result
-
+# (POST /reminders/send-pending is defined once, earlier in this file — a
+# second definition of the same route used to live here and was dead code:
+# FastAPI matches the first registration, so the duplicate never ran.)
 
 @router.get("/subscriptions/{subscription_id}/reminders", status_code=200)
-async def get_reminder_history(
+async def get_subscription_reminders(
     subscription_id: str,
     limit: int = 10,
     offset: int = 0,
@@ -1348,7 +1314,7 @@ async def get_revenue_report(
     ```
     """
     
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can view reports"
@@ -1356,7 +1322,7 @@ async def get_revenue_report(
     
     # If not admin of all schools, can only view own school
     if school_id and school_id != current_user.school_id:
-        if current_user.role != UserRole.ADMIN:
+        if current_user.role != UserRole.SUPER_ADMIN:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot view other schools' reports"
@@ -1400,7 +1366,7 @@ async def get_aging_analysis(
     ```
     """
     
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can view reports"
@@ -1443,7 +1409,7 @@ async def get_top_paying_schools(
     ```
     """
     
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can view reports"
@@ -1488,7 +1454,7 @@ async def get_bottom_paying_schools(
     ```
     """
     
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can view reports"

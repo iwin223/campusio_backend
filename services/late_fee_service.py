@@ -1,7 +1,13 @@
-"""Late fee service for platform billing (Phase 2)"""
+"""Late fee service for platform billing (Phase 2)
+
+Late fees live in the platform ledger only (PlatformSubscription +
+LateFeeCharge). No school-GL entries are written here — platform fees are
+Campusio's receivable, not the school's revenue, and the collectible total
+is computed as total_amount_due + late_fee_amount - discount_amount by
+services/platform_billing_service.py::subscription_outstanding().
+"""
 import logging
-import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -9,7 +15,6 @@ from sqlmodel import select
 from models.billing import (
     PlatformSubscription, LateFeeCharge, BillingConfiguration, SubscriptionStatus
 )
-from models.finance import JournalEntry, JournalLineItem, PostingStatus, ReferenceType
 
 logger = logging.getLogger(__name__)
 
@@ -117,13 +122,21 @@ class LateFeeService:
                 late_fee = max_late_fee
             
             late_fee = round(late_fee, 2)
-            
-            # Update subscription
+
+            # Update subscription. Derive from total_amount_due directly
+            # rather than after_discount, which is 0.0 on rows generated
+            # before it was initialized at creation time.
+            base_after_discount = round(
+                subscription.total_amount_due - subscription.discount_amount, 2
+            )
             subscription.late_fee_amount = late_fee
             subscription.late_fee_applied_date = datetime.utcnow()
-            subscription.final_amount_due = subscription.after_discount + late_fee
-            
-            # Create late fee charge record
+            subscription.after_discount = base_after_discount
+            subscription.final_amount_due = round(base_after_discount + late_fee, 2)
+            subscription.updated_at = datetime.utcnow()
+
+            # Create late fee charge record — the append-only audit row for
+            # this charge (never updated, even if the fee is later waived).
             late_fee_charge = LateFeeCharge(
                 subscription_id=subscription_id,
                 school_id=subscription.school_id,
@@ -132,22 +145,8 @@ class LateFeeService:
                 late_fee_amount=late_fee,
                 max_late_fee=max_late_fee
             )
-            
+
             session.add(late_fee_charge)
-            await session.flush()
-            
-            # Create GL entry for late fee
-            gl_result = await self._create_late_fee_gl_entry(
-                session,
-                subscription.school_id,
-                late_fee,
-                subscription_id
-            )
-            
-            if gl_result.get("success"):
-                late_fee_charge.journal_entry_id = gl_result.get("entry_id")
-                subscription.late_fee_journal_entry_id = gl_result.get("entry_id")
-            
             await session.commit()
             
             logger.info(
@@ -191,11 +190,18 @@ class LateFeeService:
             
             # Store original amount for audit
             original_late_fee = subscription.late_fee_amount
-            
-            # Clear late fee
+
+            # Clear late fee. Same defensive derivation as apply_late_fee —
+            # after_discount is 0.0 on pre-initialization rows, and using it
+            # directly would zero out the school's entire balance.
+            base_after_discount = round(
+                subscription.total_amount_due - subscription.discount_amount, 2
+            )
             subscription.late_fee_amount = 0.0
-            subscription.final_amount_due = subscription.after_discount
-            
+            subscription.after_discount = base_after_discount
+            subscription.final_amount_due = base_after_discount
+            subscription.updated_at = datetime.utcnow()
+
             await session.commit()
             
             logger.info(
@@ -262,58 +268,4 @@ class LateFeeService:
             )
         )
         return result.scalar_one_or_none()
-    
-    async def _create_late_fee_gl_entry(
-        self,
-        session: AsyncSession,
-        school_id: str,
-        late_fee_amount: float,
-        subscription_id: str
-    ) -> Dict:
-        """Create GL journal entry for late fee"""
-        try:
-            entry_id = f"JE-{uuid.uuid4().hex[:12].upper()}"
-            
-            entry = JournalEntry(
-                id=entry_id,
-                school_id=school_id,
-                entry_date=datetime.utcnow(),
-                reference_type=ReferenceType.PLATFORM_SUBSCRIPTION,
-                reference_id=subscription_id,
-                description=f"Late fee charge - Platform subscription",
-                total_debit=late_fee_amount,
-                total_credit=late_fee_amount,
-                posting_status=PostingStatus.POSTED,
-                posted_date=datetime.utcnow(),
-                created_by="SYSTEM"
-            )
-            
-            # Debit: Accounts Receivable (1200)
-            debit_line = JournalLineItem(
-                id=f"JLI-{uuid.uuid4().hex[:12].upper()}",
-                journal_entry_id=entry_id,
-                school_id=school_id,
-                gl_account_id="1200",
-                debit=late_fee_amount,
-                credit=0
-            )
-            
-            # Credit: Late Fee Income (4260)
-            credit_line = JournalLineItem(
-                id=f"JLI-{uuid.uuid4().hex[:12].upper()}",
-                journal_entry_id=entry_id,
-                school_id=school_id,
-                gl_account_id="4260",
-                debit=0,
-                credit=late_fee_amount
-            )
-            
-            session.add(entry)
-            session.add(debit_line)
-            session.add(credit_line)
-            
-            return {"success": True, "entry_id": entry_id}
-            
-        except Exception as e:
-            logger.error(f"Error creating GL entry for late fee: {str(e)}")
-            return {"success": False, "error": str(e)}
+

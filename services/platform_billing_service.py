@@ -1,9 +1,25 @@
-"""Platform billing service - manages school subscription to platform"""
+"""Platform billing service - manages school subscription to platform
+
+Ledger rules this module enforces:
+- Subscriptions and invoices are write-once snapshots: student_count and
+  unit_price are captured at generation time and never recalculated.
+- One subscription per (school, term) on the termly plan, one per
+  (school, month) on the monthly plan — backed by partial unique indexes
+  on platform_subscriptions, so a race can't create a double bill.
+- Payment application is idempotent: a Paystack webhook replay (they retry
+  until acknowledged) or a concurrent manual verify never applies the same
+  money twice. The OnlineTransaction row is the idempotency key, locked
+  FOR UPDATE while applying.
+- No writes to the school's GL: platform fees are Campusio revenue, not
+  school revenue — the subscription/invoice/transaction tables ARE the
+  platform ledger.
+"""
 import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from models.billing import (
@@ -14,11 +30,21 @@ from models.billing import (
 from models.school import AcademicTerm
 from models.student import Student, StudentStatus
 from models.payment import OnlineTransaction, TransactionStatus, TransactionType
-from models.finance import JournalEntry, JournalLineItem, ReferenceType, PostingStatus
 from services.paystack_service import PaystackService
 from services.sms_service import sms_service
 
 logger = logging.getLogger(__name__)
+
+
+def subscription_outstanding(subscription: PlatformSubscription) -> float:
+    """The single source of truth for what a school still owes on a
+    subscription: base amount plus late fees, minus discounts and payments."""
+    grand_total = (
+        subscription.total_amount_due
+        + subscription.late_fee_amount
+        - subscription.discount_amount
+    )
+    return round(grand_total - subscription.amount_paid, 2)
 
 
 class PlatformBillingService:
@@ -119,16 +145,21 @@ class PlatformBillingService:
 
             # Calculate subscription amount from the school's configured plan
             unit_price = config.monthly_unit_price if plan == BillingPlan.MONTHLY else config.unit_price
-            total_due = student_count * unit_price
+            total_due = round(student_count * unit_price, 2)
             due_date = datetime.utcnow() + timedelta(days=30)
 
-            # Create subscription record
+            # Create subscription record — a write-once billing snapshot.
+            # subtotal/after_discount/final_amount_due start equal to the base
+            # amount; late fees and discounts adjust final_amount_due later.
             subscription = PlatformSubscription(
                 school_id=school_id,
                 academic_term_id=academic_term_id,
                 student_count=student_count,
                 unit_price=unit_price,
                 total_amount_due=total_due,
+                subtotal=total_due,
+                after_discount=total_due,
+                final_amount_due=total_due,
                 billing_plan=plan,
                 billing_month=billing_month,
                 due_date=due_date,
@@ -136,35 +167,57 @@ class PlatformBillingService:
             )
 
             session.add(subscription)
-            await session.flush()
+            try:
+                await session.flush()
+            except IntegrityError:
+                # Partial unique index hit: a concurrent request created the
+                # same term/month subscription between our check and this
+                # insert. The check above catches the sequential case; this
+                # catches the race.
+                await session.rollback()
+                return {"success": False, "error": duplicate_error}
 
-            # Create invoice
-            invoice_number = await self._generate_invoice_number(session, school_id)
-            invoice = SubscriptionInvoice(
-                school_id=school_id,
-                subscription_id=subscription.id,
-                invoice_number=invoice_number,
-                academic_year=academic_term.academic_year,
-                term=academic_term.term.value,
-                student_count=student_count,
-                unit_price=unit_price,
-                subtotal=total_due,
-                total_amount=total_due,
-                due_date=due_date,
-                status="ISSUED"
-            )
-            
-            session.add(invoice)
-            subscription.invoice_id = invoice.id
-            await session.flush()
-            
+            # Create invoice. invoice_number is globally unique; retry with a
+            # recount if a concurrent generation for another school grabbed
+            # the same sequence number.
+            invoice = None
+            for attempt in range(3):
+                invoice_number = await self._generate_invoice_number(session, offset=attempt)
+                invoice = SubscriptionInvoice(
+                    school_id=school_id,
+                    subscription_id=subscription.id,
+                    invoice_number=invoice_number,
+                    academic_year=academic_term.academic_year,
+                    term=academic_term.term.value,
+                    student_count=student_count,
+                    unit_price=unit_price,
+                    subtotal=total_due,
+                    total_amount=total_due,
+                    due_date=due_date,
+                    status="ISSUED"
+                )
+                session.add(invoice)
+                subscription.invoice_id = invoice.id
+                try:
+                    await session.flush()
+                    break
+                except IntegrityError:
+                    await session.rollback()
+                    # The subscription insert rolled back too - redo it
+                    session.add(subscription)
+                    await session.flush()
+                    invoice = None
+            if invoice is None:
+                await session.rollback()
+                return {"success": False, "error": "Could not allocate a unique invoice number, please retry"}
+
             await session.commit()
-            
+
             logger.info(
                 f"Generated subscription for school {school_id}, "
                 f"term {academic_term_id}, amount: GHS {total_due}"
             )
-            
+
             return {
                 "success": True,
                 "subscription_id": subscription.id,
@@ -173,7 +226,7 @@ class PlatformBillingService:
                 "total_due": total_due,
                 "due_date": due_date.isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Error generating subscription: {str(e)}")
             await session.rollback()
@@ -211,10 +264,11 @@ class PlatformBillingService:
             
             if subscription.status == SubscriptionStatus.CANCELLED:
                 return {"success": False, "error": "Subscription is cancelled"}
-            
-            # Calculate amount to pay
-            amount_due = subscription.total_amount_due - subscription.amount_paid
-            
+
+            # Calculate amount to pay — includes late fees and discounts, not
+            # just the base amount, so late fees are actually collectible.
+            amount_due = subscription_outstanding(subscription)
+
             if amount_due <= 0:
                 return {"success": False, "error": "No amount due"}
             
@@ -310,21 +364,37 @@ class PlatformBillingService:
     ) -> Dict:
         """
         Verify payment and process subscription
-        
-        Called from webhook after Paystack confirms payment
+
+        Called from the Paystack webhook (and the manual verify endpoint)
+        after Paystack confirms payment.
+
+        Idempotent: Paystack retries webhooks until acknowledged, and the
+        manual verify endpoint can race the webhook. The transaction row is
+        the idempotency key — locked FOR UPDATE, and once its status is
+        SUCCESS the same money is never applied again.
         """
         try:
-            # Get transaction
+            # Lock the transaction row for the duration of the application so
+            # a concurrent webhook retry / manual verify blocks here and then
+            # sees status=SUCCESS instead of double-applying.
             txn_result = await session.execute(
-                select(OnlineTransaction).where(
-                    OnlineTransaction.id == transaction_id
-                )
+                select(OnlineTransaction)
+                .where(OnlineTransaction.id == transaction_id)
+                .with_for_update()
             )
             transaction = txn_result.scalar_one_or_none()
-            
+
             if not transaction:
                 return {"success": False, "error": "Transaction not found"}
-            
+
+            if transaction.status == TransactionStatus.SUCCESS:
+                logger.info(f"Subscription payment already processed, skipping: {reference}")
+                return {
+                    "success": True,
+                    "already_processed": True,
+                    "subscription_id": transaction.fee_id,
+                }
+
             # Get subscription
             sub_result = await session.execute(
                 select(PlatformSubscription).where(
@@ -332,38 +402,56 @@ class PlatformBillingService:
                 )
             )
             subscription = sub_result.scalar_one_or_none()
-            
+
             if not subscription:
                 return {"success": False, "error": "Subscription not found"}
-            
-            # Verify amount
-            if amount_paid < subscription.total_amount_due - subscription.amount_paid:
-                # Partial payment - update status
-                subscription.amount_paid += amount_paid
-                transaction.amount_paid = amount_paid
-                subscription.status = SubscriptionStatus.ACTIVE  # Allow partial
-            else:
-                # Full payment
-                subscription.amount_paid = subscription.total_amount_due
-                subscription.status = SubscriptionStatus.ACTIVE
-                subscription.paid_at = datetime.utcnow()
-            
+
+            remaining_due = subscription_outstanding(subscription)
+
             transaction.status = TransactionStatus.SUCCESS
+            transaction.amount_paid = amount_paid
             transaction.completed_at = datetime.utcnow()
-            
-            # Create GL entry for revenue
-            gl_result = await self._create_gl_entry(
-                session,
-                school_id=subscription.school_id,
-                amount=amount_paid,
-                reference=reference,
-                description=f"Platform subscription payment - {subscription.student_count} students",
-                subscription_id=subscription.id
-            )
-            
-            if gl_result.get("success"):
-                subscription.journal_entry_id = gl_result.get("entry_id")
-            
+
+            if remaining_due <= 0:
+                # The subscription was already fully settled (e.g. the school
+                # paid two outstanding checkout links). The money genuinely
+                # arrived, so the transaction is SUCCESS — but it must NOT be
+                # applied to the subscription again. Flag it for a refund
+                # instead of silently absorbing it.
+                logger.warning(
+                    f"OVERPAYMENT: {reference} paid GHS {amount_paid} against "
+                    f"already-settled subscription {subscription.id} — needs refund"
+                )
+                transaction.failed_reason = "Overpayment: subscription already settled, refund required"
+                await session.commit()
+                return {
+                    "success": True,
+                    "overpayment": True,
+                    "subscription_id": subscription.id,
+                    "amount_paid": amount_paid,
+                    "message": "Subscription already settled; payment flagged for refund",
+                }
+
+            # Never apply more than what's owed to the ledger.
+            amount_applied = round(min(amount_paid, remaining_due), 2)
+            subscription.amount_paid = round(subscription.amount_paid + amount_applied, 2)
+            subscription.status = SubscriptionStatus.ACTIVE
+            subscription.updated_at = datetime.utcnow()
+            if subscription_outstanding(subscription) <= 0.01:
+                subscription.paid_at = datetime.utcnow()
+            if amount_applied < amount_paid:
+                logger.warning(
+                    f"OVERPAYMENT: {reference} paid GHS {amount_paid}, only "
+                    f"GHS {amount_applied} was owed — excess needs refund"
+                )
+                transaction.failed_reason = (
+                    f"Overpayment: GHS {round(amount_paid - amount_applied, 2)} excess, refund required"
+                )
+
+            # Note: no GL journal entry is written here. Platform fees are
+            # Campusio revenue, not the school's — the subscription, invoice,
+            # and transaction rows are the platform ledger.
+
             # Update invoice status
             if subscription.invoice_id:
                 inv_result = await session.execute(
@@ -373,44 +461,34 @@ class PlatformBillingService:
                 )
                 invoice = inv_result.scalar_one_or_none()
                 if invoice:
-                    # Ensure all amounts are floats for proper comparison
-                    old_amount_paid = float(invoice.amount_paid)
-                    total_inv_amount = float(invoice.total_amount)
-                    
-                    invoice.amount_paid = old_amount_paid + float(amount_paid)
-                    
-                    # Use small tolerance for float comparison (0.01 GHS)
-                    remaining_balance = total_inv_amount - invoice.amount_paid
-                    
-                    logger.info(
-                        f"Invoice {invoice.invoice_number}: "
-                        f"Total={total_inv_amount}, "
-                        f"Paid={invoice.amount_paid}, "
-                        f"Remaining={remaining_balance}"
-                    )
-                    
+                    invoice.amount_paid = round(float(invoice.amount_paid) + amount_applied, 2)
+                    remaining_balance = float(invoice.total_amount) - invoice.amount_paid
+
                     if remaining_balance <= 0.01:  # Essentially fully paid
                         invoice.status = "PAID"
                         invoice.paid_at = datetime.utcnow()
-                        logger.info(f"✓ Invoice {invoice.invoice_number} marked as PAID")
+                        logger.info(f"Invoice {invoice.invoice_number} marked as PAID")
                     else:
                         invoice.status = "PARTIAL"
-                        logger.info(f"⚠ Invoice {invoice.invoice_number} marked as PARTIAL (remaining: GHS {remaining_balance:.2f})")
-            
+                        logger.info(
+                            f"Invoice {invoice.invoice_number} marked as PARTIAL "
+                            f"(remaining: GHS {remaining_balance:.2f})"
+                        )
+
             await session.commit()
-            
+
             logger.info(
                 f"Processed payment for subscription {subscription.id}, "
-                f"amount: GHS {amount_paid}"
+                f"amount applied: GHS {amount_applied}"
             )
-            
+
             return {
                 "success": True,
                 "subscription_id": subscription.id,
                 "status": subscription.status.value,
-                "amount_paid": amount_paid
+                "amount_paid": amount_applied
             }
-            
+
         except Exception as e:
             logger.error(f"Error processing payment: {str(e)}")
             await session.rollback()
@@ -589,79 +667,26 @@ class PlatformBillingService:
     async def _generate_invoice_number(
         self,
         session: AsyncSession,
-        school_id: str
+        offset: int = 0
     ) -> str:
-        """Generate unique invoice number"""
-        # Get current year
+        """Generate the next invoice number, e.g. PLAT-2026-0001.
+
+        invoice_number is globally unique (DB constraint), so the sequence is
+        counted across ALL schools — the old per-school count handed every
+        school's first invoice the same number and the second school's
+        generation crashed on the unique constraint. The LIKE pattern also
+        used to match against the bare year ("2026%") which never matched
+        numbers starting with "PLAT-", so the count was permanently zero.
+
+        `offset` lets the caller retry with the next number if a concurrent
+        generation won the race for this one.
+        """
         year = datetime.utcnow().year
-        
-        # Count invoices for this school this year
         result = await session.execute(
-            select(SubscriptionInvoice).where(
-                SubscriptionInvoice.school_id == school_id,
-                SubscriptionInvoice.invoice_number.like(f"{year}%")
+            select(SubscriptionInvoice.id).where(
+                SubscriptionInvoice.invoice_number.like(f"PLAT-{year}-%")
             )
         )
-        count = len(result.scalars().all())
-        
-        # Generate invoice number: PLAT-2026-0001
-        return f"PLAT-{year}-{str(count + 1).zfill(4)}"
-    
-    async def _create_gl_entry(
-        self,
-        session: AsyncSession,
-        school_id: str,
-        amount: float,
-        reference: str,
-        description: str,
-        subscription_id: str
-    ) -> Dict:
-        """Create GL journal entry for platform subscription revenue"""
-        try:
-            # Create journal entry
-            entry_id = f"JE-{uuid.uuid4().hex[:12].upper()}"
-            
-            entry = JournalEntry(
-                id=entry_id,
-                school_id=school_id,
-                entry_date=datetime.utcnow(),
-                reference_type=ReferenceType.PLATFORM_SUBSCRIPTION,
-                reference_id=subscription_id,
-                description=description,
-                total_debit=amount,
-                total_credit=amount,
-                posting_status=PostingStatus.POSTED,
-                posted_date=datetime.utcnow(),
-                created_by="SYSTEM"
-            )
-            
-            # Line items
-            # Debit: Cash/Bank (1100)
-            debit_line = JournalLineItem(
-                id=f"JLI-{uuid.uuid4().hex[:12].upper()}",
-                journal_entry_id=entry_id,
-                school_id=school_id,
-                gl_account_id="1100",  # Will need to fetch actual account ID
-                debit=amount,
-                credit=0
-            )
-            
-            # Credit: Platform Revenue (4250)
-            credit_line = JournalLineItem(
-                id=f"JLI-{uuid.uuid4().hex[:12].upper()}",
-                journal_entry_id=entry_id,
-                school_id=school_id,
-                gl_account_id="4250",  # Will need to fetch actual account ID
-                debit=0,
-                credit=amount
-            )
-            
-            session.add(entry)
-            session.add(debit_line)
-            session.add(credit_line)
-            
-            return {"success": True, "entry_id": entry_id}
-            
-        except Exception as e:
-            logger.error(f"Error creating GL entry: {str(e)}")
-            return {"success": False, "error": str(e)}
+        count = len(result.all())
+        return f"PLAT-{year}-{str(count + 1 + offset).zfill(4)}"
+

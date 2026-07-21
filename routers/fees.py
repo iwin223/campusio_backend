@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlmodel import select, func, and_, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 import uuid
 import logging
@@ -361,10 +361,29 @@ async def record_payment(
     
     fee_result = await session.execute(select(Fee).where(Fee.id == payment_data.fee_id))
     fee = fee_result.scalar_one_or_none()
-    
+
     if not fee:
         raise HTTPException(status_code=404, detail="Fee not found")
-    
+
+    # Double-submit guard: an identical payment (same fee, amount, method,
+    # recorded by the same user) within the last 30 seconds is a double-click
+    # or repeated request, not a second real payment — reject it instead of
+    # silently recording the money twice.
+    recent_duplicate = await session.execute(
+        select(FeePayment).where(
+            FeePayment.fee_id == payment_data.fee_id,
+            FeePayment.amount == payment_data.amount,
+            FeePayment.payment_method == payment_data.payment_method,
+            FeePayment.received_by == current_user.id,
+            FeePayment.created_at > datetime.utcnow() - timedelta(seconds=30),
+        )
+    )
+    if recent_duplicate.scalars().first():
+        raise HTTPException(
+            status_code=409,
+            detail="An identical payment was recorded seconds ago. If this is a genuinely separate payment, wait 30 seconds and try again."
+        )
+
     receipt_number = f"RCP-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
     
     # Get fee structure for GL posting

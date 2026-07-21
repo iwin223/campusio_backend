@@ -26,7 +26,15 @@ class BillingPlan(str, Enum):
 
 
 class PlatformSubscription(SQLModel, table=True):
-    """School platform subscription per academic term"""
+    """School platform subscription per academic term.
+
+    Duplicate-bill protection lives at the DB level via partial unique
+    indexes (created by direct migration, not create_all):
+      uq_platform_sub_school_term  (school_id, academic_term_id) WHERE billing_month IS NULL
+      uq_platform_sub_school_month (school_id, billing_month)    WHERE billing_month IS NOT NULL
+    generate_term_subscription catches the IntegrityError these raise, so a
+    race between two generation requests cannot create a double bill.
+    """
     __tablename__ = "platform_subscriptions"
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)

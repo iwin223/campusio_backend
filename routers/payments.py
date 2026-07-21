@@ -453,10 +453,18 @@ async def paystack_webhook(
         
         # Parse payload
         payload = json.loads(body)
-        
+
         # Log for debugging
-        logger.info(f"Paystack webhook received: event={payload.get('event')}")
-        
+        event = payload.get("event")
+        logger.info(f"Paystack webhook received: event={event}")
+
+        # Only charge events represent money movement on our references.
+        # Paystack also sends transfer.*, subscription.*, refund.* etc — a
+        # signed non-charge event must never be treated as a payment.
+        if event and not str(event).startswith("charge."):
+            logger.info(f"Ignoring non-charge webhook event: {event}")
+            return {"success": True, "processed": False}
+
         # Extract reference to determine payment type
         data = payload.get("data", {})
         reference = data.get("reference") if isinstance(data, dict) else payload.get("reference")
@@ -477,14 +485,20 @@ async def paystack_webhook(
         
         # Route based on payment type - check reference prefix (more reliable than fee_id)
         if reference.startswith("PLAT-"):
-            # Platform subscription payment - use billing service
+            # Platform subscription payment - use billing service.
+            # Only a successful charge may be applied to the subscription
+            # ledger; charge.failed etc. must never credit anything.
+            if event != "charge.success":
+                logger.info(f"Ignoring non-success charge event for platform payment: {event} ({reference})")
+                return {"success": True, "processed": False}
+
             logger.info(f"Platform subscription payment detected: {reference}")
             from services.platform_billing_service import PlatformBillingService
-            
+
             paystack_secret_key = os.getenv("PAYSTACK_SECRET_KEY", "")
             if not paystack_secret_key:
                 raise ValueError("PAYSTACK_SECRET_KEY not configured")
-            
+
             billing_service = PlatformBillingService(paystack_secret_key)
             result = await billing_service.verify_and_process_payment(
                 session=session,

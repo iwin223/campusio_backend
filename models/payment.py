@@ -51,7 +51,7 @@ class OnlineTransaction(SQLModel, table=True):
     
     # Gateway info
     gateway: str = PaymentGateway.PAYSTACK  # "paystack", "flutterwave", etc.
-    reference: str = Field(index=True)  # Paystack reference
+    reference: str = Field(unique=True, index=True)  # Paystack reference — the payment idempotency key (uq_online_txn_reference)
     access_code: Optional[str] = None  # Paystack access code
     payment_url: Optional[str] = None  # URL for parent to click
     
