@@ -5,7 +5,7 @@ from sqlmodel import select, func, and_, SQLModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 import uuid
 import json
@@ -903,7 +903,27 @@ async def create_transport_fee(
     )
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Route not found")
-    
+
+    # Double-submit guard: reject an identical fee (same student, route,
+    # term, type and amount) created in the last 30 seconds, mirroring the
+    # fee-payment guard in routers/fees.py::record_payment.
+    dupe_cutoff = datetime.utcnow() - timedelta(seconds=30)
+    dupe_result = await session.execute(
+        select(TransportFee).where(
+            and_(
+                TransportFee.school_id == school_id,
+                TransportFee.student_id == fee_data.student_id,
+                TransportFee.route_id == fee_data.route_id,
+                TransportFee.academic_term_id == fee_data.academic_term_id,
+                TransportFee.fee_type == fee_data.fee_type,
+                TransportFee.amount_due == fee_data.amount_due,
+                TransportFee.created_at >= dupe_cutoff,
+            )
+        )
+    )
+    if dupe_result.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="An identical transport fee was just created — avoid double-submitting")
+
     # Create fee and calculate is_paid (amount_paid + discount >= amount_due)
     fee_dict = fee_data.dict()
     amount_paid = fee_dict.get('amount_paid', 0.0)
@@ -1084,18 +1104,27 @@ async def update_transport_fee(
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
     
+    # Locked FOR UPDATE: this endpoint takes a client-supplied absolute
+    # amount_paid and diffs it against the row's current value to decide
+    # the GL posting amount. Without a lock, two concurrent submissions
+    # (double-click, retry) both read the same stale old_amount_paid and
+    # each post their own GL journal entry for the same payment delta —
+    # the fee's amount_paid itself lands correctly (last write wins on the
+    # same value) but the GL ends up double-booked. Locking makes the
+    # second request block until the first's write is visible, so its
+    # delta comes out as zero instead of a duplicate.
     result = await session.execute(
         select(TransportFee).where(
             and_(TransportFee.id == fee_id, TransportFee.school_id == school_id)
-        )
+        ).with_for_update()
     )
     fee = result.scalar_one_or_none()
     if not fee:
         raise HTTPException(status_code=404, detail="Fee not found")
-    
+
     update_data = fee_data.dict(exclude_unset=True)
     old_amount_paid = fee.amount_paid
-    
+
     # Auto-calculate is_paid based on amount_paid and amount_due
     if "amount_paid" in update_data or "amount_due" in update_data:
         amount_due = update_data.get("amount_due", fee.amount_due)

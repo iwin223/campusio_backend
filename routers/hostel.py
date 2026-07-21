@@ -4,7 +4,7 @@ from fastapi.encoders import jsonable_encoder
 from sqlmodel import select, func, and_, SQLModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 import uuid
 import logging
@@ -961,12 +961,32 @@ async def create_hostel_fee(
     school_id = current_user.school_id
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
-    
+
+    # Double-submit guard: reject an identical fee (same student, hostel,
+    # term, type and amount) created in the last 30 seconds, mirroring the
+    # fee-payment guard in routers/fees.py::record_payment.
+    dupe_cutoff = datetime.utcnow() - timedelta(seconds=30)
+    dupe_result = await session.execute(
+        select(HostelFee).where(
+            and_(
+                HostelFee.school_id == school_id,
+                HostelFee.student_id == fee_data.student_id,
+                HostelFee.hostel_id == fee_data.hostel_id,
+                HostelFee.academic_term_id == fee_data.academic_term_id,
+                HostelFee.fee_type == fee_data.fee_type,
+                HostelFee.amount_due == fee_data.amount_due,
+                HostelFee.created_at >= dupe_cutoff,
+            )
+        )
+    )
+    if dupe_result.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="An identical hostel fee was just created — avoid double-submitting")
+
     fee = HostelFee(**fee_data.dict(), school_id=school_id)
     session.add(fee)
     await session.commit()
     await session.refresh(fee)
-    
+
     return {**jsonable_encoder(fee), "fee_type": fee.fee_type.value}
 
 
@@ -1053,15 +1073,24 @@ async def update_hostel_fee(
     if not school_id:
         raise HTTPException(status_code=403, detail="No school context")
     
+    # Locked FOR UPDATE: this endpoint takes a client-supplied absolute
+    # amount_paid and diffs it against the row's current value to decide
+    # the GL posting amount. Without a lock, two concurrent submissions
+    # (double-click, retry) both read the same stale old_amount_paid and
+    # each post their own GL journal entry for the same payment delta —
+    # the fee's amount_paid itself lands correctly (last write wins on the
+    # same value) but the GL ends up double-booked. Locking makes the
+    # second request block until the first's write is visible, so its
+    # delta comes out as zero instead of a duplicate.
     result = await session.execute(
         select(HostelFee).where(
             and_(HostelFee.id == fee_id, HostelFee.school_id == school_id)
-        )
+        ).with_for_update()
     )
     fee = result.scalar_one_or_none()
     if not fee:
         raise HTTPException(status_code=404, detail="Fee not found")
-    
+
     update_data = fee_data.dict(exclude_unset=True)
     old_amount_paid = fee.amount_paid
     
