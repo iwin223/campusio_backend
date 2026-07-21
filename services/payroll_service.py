@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, and_
 from decimal import Decimal
 
@@ -398,8 +399,21 @@ class PayrollService:
                 notes=notes
             )
             self.session.add(payroll_run)
-            await self.session.flush()
-            
+            try:
+                await self.session.flush()
+            except IntegrityError:
+                # uq_payroll_run_school_period hit: a concurrent request
+                # generated this exact period between our check above and
+                # this insert. The check catches the sequential case; this
+                # catches the race.
+                await self.session.rollback()
+                return {
+                    "success": False,
+                    "message": f"Payroll already exists for {period_name}",
+                    "payroll_run": None,
+                    "errors": ["Concurrent payroll generation detected"]
+                }
+
             # Generate line items for each staff
             total_gross = 0.0
             total_allowances = 0.0
@@ -455,9 +469,16 @@ class PayrollService:
                         logger.warning(f"Error evaluating rules for staff {staff.id}: {str(e)}")
                         # Continue without rules if error occurs
                     
-                    # Add rule deductions to total
+                    # Add rule deductions to total. Reapply the same zero-floor
+                    # calculate_net_amount() used above — otherwise heavy rule
+                    # deductions can push this staff member's net_amount
+                    # negative, which then silently understates
+                    # payroll_run.total_net (and the GL credit to Salaries
+                    # Payable) by that same amount.
                     calculation["total_deductions"] += rule_deductions
-                    calculation["net_amount"] = calculation["gross_amount"] - calculation["total_deductions"]
+                    calculation["net_amount"] = self.calculate_net_amount(
+                        calculation["gross_amount"], calculation["total_deductions"]
+                    )
                     calculation["breakdown"]["applied_rules"] = applied_rules
                     calculation["breakdown"]["rule_deductions"] = rule_deductions
                     
@@ -688,21 +709,26 @@ class PayrollService:
             Status dictionary with payroll_run_id and journal_entry_id if successful
         """
         try:
-            # Get the payroll run
+            # Get the payroll run. Locked FOR UPDATE so a concurrent second
+            # "Post" click (or request retry) blocks here instead of both
+            # racing past the status == APPROVED check below and each
+            # creating their own GL journal entry for the same payroll run.
             result = await self.session.execute(
-                select(PayrollRun).where(
+                select(PayrollRun)
+                .where(
                     PayrollRun.id == payroll_run_id,
                     PayrollRun.school_id == school_id
                 )
+                .with_for_update()
             )
             payroll_run = result.scalar_one_or_none()
-            
+
             if not payroll_run:
                 return {
                     "success": False,
                     "message": "Payroll run not found"
                 }
-            
+
             if payroll_run.status != PayrollStatus.APPROVED:
                 return {
                     "success": False,
