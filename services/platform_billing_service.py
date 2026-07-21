@@ -148,9 +148,24 @@ class PlatformBillingService:
             total_due = round(student_count * unit_price, 2)
             due_date = datetime.utcnow() + timedelta(days=30)
 
+            # Apply any bulk discount rule the school qualifies for (e.g.
+            # "500+ students get 5% off"). This used to be entirely dead —
+            # DiscountRule rows could be created and listed via the API, but
+            # nothing ever called BulkDiscountService.calculate_discount, so
+            # every subscription charged full price regardless of negotiated
+            # discounts.
+            from services.bulk_discount_service import BulkDiscountService
+            discount_result = await BulkDiscountService().calculate_discount(
+                session, school_id, total_due, student_count
+            )
+            discount_amount = discount_result.get("discount_amount", 0.0)
+            discount_percentage = discount_result.get("discount_percentage", 0.0)
+            discount_reason = discount_result.get("reason")
+            after_discount = round(total_due - discount_amount, 2)
+
             # Create subscription record — a write-once billing snapshot.
-            # subtotal/after_discount/final_amount_due start equal to the base
-            # amount; late fees and discounts adjust final_amount_due later.
+            # final_amount_due starts equal to after_discount; late fees
+            # adjust it later (see late_fee_service.py).
             subscription = PlatformSubscription(
                 school_id=school_id,
                 academic_term_id=academic_term_id,
@@ -158,8 +173,11 @@ class PlatformBillingService:
                 unit_price=unit_price,
                 total_amount_due=total_due,
                 subtotal=total_due,
-                after_discount=total_due,
-                final_amount_due=total_due,
+                discount_amount=discount_amount,
+                discount_percentage=discount_percentage,
+                discount_reason=discount_reason if discount_amount > 0 else None,
+                after_discount=after_discount,
+                final_amount_due=after_discount,
                 billing_plan=plan,
                 billing_month=billing_month,
                 due_date=due_date,
@@ -224,6 +242,9 @@ class PlatformBillingService:
                 "invoice_id": invoice.id,
                 "student_count": student_count,
                 "total_due": total_due,
+                "discount_amount": discount_amount,
+                "discount_percentage": discount_percentage,
+                "final_amount_due": after_discount,
                 "due_date": due_date.isoformat()
             }
 

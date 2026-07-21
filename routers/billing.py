@@ -42,11 +42,16 @@ class SendRemindersRequest(SQLModel):
 
 
 class CreateDiscountRuleRequest(SQLModel):
+    school_id: str
     min_students: int
     discount_percentage: Optional[float] = None
     discount_amount: Optional[float] = None
     max_students: Optional[int] = None
     description: str = ""
+
+
+class ToggleDiscountRuleRequest(SQLModel):
+    is_active: bool
 
 
 
@@ -1131,16 +1136,12 @@ async def create_discount_rule(
     session: AsyncSession = Depends(get_session)
 ) -> dict:
     """
-    Create bulk discount rule (School Admin only)
-    
-    **Auth Required:** Admin or School
-    
-    **Query Params:**
-    - `min_students`: Minimum students to apply discount
-    - `discount_percentage`: % discount (e.g., 5 for 5%)
-    - `max_students` (optional): Upper limit
-    - `description`: Rule description
-    
+    Create a bulk discount rule for a school (super admin only).
+
+    This grants a school a discount on their platform subscription — it must
+    never be self-service. A school_admin creating a discount rule for their
+    own school would be granting themselves a discount on what they owe us.
+
     **Response:**
     ```json
     {
@@ -1150,51 +1151,40 @@ async def create_discount_rule(
     }
     ```
     """
-    min_students = body.min_students
-    discount_percentage = body.discount_percentage
-    discount_amount = body.discount_amount
-    max_students = body.max_students
-    description = body.description
-    
-    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN]:
+    if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins or school users can create discount rules"
+            detail="Only super admins can create discount rules"
         )
-    
-    school_id = current_user.school_id
-    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User must be associated with a school"
-        )
-    
+
     from services.bulk_discount_service import BulkDiscountService
-    
+
     service = BulkDiscountService()
     result = await service.create_discount_rule(
         session=session,
-        school_id=school_id,
-        min_students=min_students,
-        discount_percentage=discount_percentage,
-        discount_amount=discount_amount,
-        max_students=max_students,
-        description=description
+        school_id=body.school_id,
+        min_students=body.min_students,
+        discount_percentage=body.discount_percentage,
+        discount_amount=body.discount_amount,
+        max_students=body.max_students,
+        description=body.description
     )
-    
+
     return result
 
 
 @router.get("/discounts/rules", status_code=200)
 async def list_discount_rules(
+    school_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ) -> dict:
     """
-    List all discount rules for school
-    
-    **Auth Required:** Authenticated user
-    
+    List discount rules for a school. Super admin may pass any school_id
+    (they have none of their own); a school admin always sees their own
+    school's rules regardless of what's passed, so they can't probe another
+    school's negotiated pricing.
+
     **Response:**
     ```json
     {
@@ -1209,22 +1199,49 @@ async def list_discount_rules(
     }
     ```
     """
-    
-    if not current_user.school_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User must be associated with a school"
-        )
-    
+    if current_user.role == UserRole.SUPER_ADMIN:
+        if not school_id:
+            raise HTTPException(status_code=400, detail="school_id is required")
+        target_school_id = school_id
+    else:
+        if not current_user.school_id:
+            raise HTTPException(status_code=400, detail="User must be associated with a school")
+        target_school_id = current_user.school_id
+
     from services.bulk_discount_service import BulkDiscountService
-    
+
     service = BulkDiscountService()
     rules = await service.list_discount_rules(
         session=session,
-        school_id=current_user.school_id
+        school_id=target_school_id
     )
-    
+
     return {"rules": rules}
+
+
+@router.put("/discounts/rules/{rule_id}/toggle", status_code=200)
+async def toggle_discount_rule(
+    rule_id: str,
+    body: ToggleDiscountRuleRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Enable or disable a discount rule (super admin only)."""
+    if current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only super admins can toggle discount rules"
+        )
+
+    from services.bulk_discount_service import BulkDiscountService
+
+    service = BulkDiscountService()
+    result = await service.toggle_rule(session=session, rule_id=rule_id, is_active=body.is_active)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Rule not found"))
+
+    return result
 
 
 # --- REMINDER ENDPOINTS ---
