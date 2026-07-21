@@ -559,8 +559,219 @@ class PayrollService:
                 "errors": [str(e)]
             }
     
+    # ==================== Payroll Adjustments ====================
+    # Bonus/penalty/advance-recovery adjustments against a specific staff
+    # member's line item on a specific run. Created as pending; only
+    # approved adjustments affect net_amount, so an unreviewed bonus can
+    # never accidentally hit take-home pay. Only allowed while the run is
+    # still DRAFT/GENERATED — once a run is APPROVED its numbers are meant
+    # to be final, matching why reject_payroll_run exists as the one way
+    # back to an editable state.
+
+    async def create_adjustment(
+        self,
+        school_id: str,
+        payroll_run_id: str,
+        staff_id: str,
+        adjustment_type: str,
+        amount: float,
+        reason: str,
+        created_by: str,
+    ) -> Dict[str, Any]:
+        """Create a pending adjustment against a staff member's line item."""
+        try:
+            run_result = await self.session.execute(
+                select(PayrollRun).where(
+                    PayrollRun.id == payroll_run_id, PayrollRun.school_id == school_id
+                )
+            )
+            run = run_result.scalar_one_or_none()
+            if not run:
+                return {"success": False, "error": "Payroll run not found"}
+
+            if run.status not in (PayrollStatus.DRAFT, PayrollStatus.GENERATED):
+                return {
+                    "success": False,
+                    "error": f"Cannot add adjustments to a run in {run.status} status — reject it back to draft first",
+                }
+
+            line_result = await self.session.execute(
+                select(PayrollLineItem).where(
+                    PayrollLineItem.payroll_run_id == payroll_run_id,
+                    PayrollLineItem.staff_id == staff_id,
+                )
+            )
+            if not line_result.scalar_one_or_none():
+                return {"success": False, "error": "Staff member has no line item on this run"}
+
+            adjustment = PayrollAdjustment(
+                payroll_run_id=payroll_run_id,
+                school_id=school_id,
+                staff_id=staff_id,
+                adjustment_type=adjustment_type,
+                amount=amount,
+                reason=reason,
+                created_by=created_by,
+            )
+            self.session.add(adjustment)
+            await self.session.commit()
+            await self.session.refresh(adjustment)
+
+            return {
+                "success": True,
+                "adjustment_id": adjustment.id,
+                "message": "Adjustment created, pending approval",
+            }
+
+        except Exception as e:
+            logger.error(f"Error creating payroll adjustment: {str(e)}")
+            await self.session.rollback()
+            return {"success": False, "error": str(e)}
+
+    async def list_adjustments(
+        self,
+        school_id: str,
+        payroll_run_id: Optional[str] = None,
+        staff_id: Optional[str] = None,
+    ) -> List[PayrollAdjustment]:
+        """List adjustments, optionally filtered by run and/or staff member."""
+        query = select(PayrollAdjustment).where(PayrollAdjustment.school_id == school_id)
+        if payroll_run_id:
+            query = query.where(PayrollAdjustment.payroll_run_id == payroll_run_id)
+        if staff_id:
+            query = query.where(PayrollAdjustment.staff_id == staff_id)
+        query = query.order_by(PayrollAdjustment.created_at.desc())
+        result = await self.session.execute(query)
+        return result.scalars().all()
+
+    async def approve_adjustment(
+        self,
+        school_id: str,
+        adjustment_id: str,
+        approved_by: str,
+    ) -> Dict[str, Any]:
+        """Approve a pending adjustment and fold it into the line item's
+        net_amount immediately.
+
+        Recomputes total_adjustments/net_amount from scratch off ALL
+        approved adjustments for this (run, staff) pair rather than
+        incrementing — idempotent and self-correcting regardless of
+        approval order, and immune to drift if this is ever called twice.
+        """
+        try:
+            adj_result = await self.session.execute(
+                select(PayrollAdjustment).where(
+                    PayrollAdjustment.id == adjustment_id,
+                    PayrollAdjustment.school_id == school_id,
+                )
+            )
+            adjustment = adj_result.scalar_one_or_none()
+            if not adjustment:
+                return {"success": False, "error": "Adjustment not found"}
+
+            if adjustment.approved_by is not None:
+                return {"success": False, "error": "Adjustment already approved"}
+
+            run_result = await self.session.execute(
+                select(PayrollRun).where(PayrollRun.id == adjustment.payroll_run_id)
+            )
+            run = run_result.scalar_one_or_none()
+            if not run or run.status not in (PayrollStatus.DRAFT, PayrollStatus.GENERATED):
+                return {
+                    "success": False,
+                    "error": "Cannot approve an adjustment on a run that is no longer draft/generated",
+                }
+
+            # Lock the line item: two adjustments for the same staff member
+            # being approved concurrently must not race each other's
+            # from-scratch recomputation.
+            line_result = await self.session.execute(
+                select(PayrollLineItem).where(
+                    PayrollLineItem.payroll_run_id == adjustment.payroll_run_id,
+                    PayrollLineItem.staff_id == adjustment.staff_id,
+                ).with_for_update()
+            )
+            line_item = line_result.scalar_one_or_none()
+            if not line_item:
+                return {"success": False, "error": "Staff member has no line item on this run"}
+
+            adjustment.approved_by = approved_by
+            adjustment.approved_at = datetime.utcnow()
+            adjustment.updated_at = datetime.utcnow()
+            self.session.add(adjustment)
+            await self.session.flush()
+
+            approved_result = await self.session.execute(
+                select(PayrollAdjustment).where(
+                    PayrollAdjustment.payroll_run_id == adjustment.payroll_run_id,
+                    PayrollAdjustment.staff_id == adjustment.staff_id,
+                    PayrollAdjustment.approved_by.is_not(None),
+                )
+            )
+            total_adjustments = sum(float(a.amount) for a in approved_result.scalars().all())
+
+            base_net = max(line_item.gross_amount - line_item.total_deductions, 0.0)
+            line_item.total_adjustments = round(total_adjustments, 2)
+            line_item.net_amount = round(max(base_net + total_adjustments, 0.0), 2)
+            line_item.updated_at = datetime.utcnow()
+            self.session.add(line_item)
+            await self.session.flush()
+
+            # Roll the run's total_net up from a fresh aggregation of every
+            # line item, not an incremental delta — same self-correcting
+            # reasoning as the line item recompute above.
+            all_lines_result = await self.session.execute(
+                select(PayrollLineItem).where(PayrollLineItem.payroll_run_id == adjustment.payroll_run_id)
+            )
+            run.total_net = round(sum(li.net_amount for li in all_lines_result.scalars().all()), 2)
+            run.updated_at = datetime.utcnow()
+            self.session.add(run)
+
+            await self.session.commit()
+
+            return {
+                "success": True,
+                "adjustment_id": adjustment.id,
+                "line_item_net_amount": line_item.net_amount,
+                "message": "Adjustment approved and applied",
+            }
+
+        except Exception as e:
+            logger.error(f"Error approving payroll adjustment: {str(e)}")
+            await self.session.rollback()
+            return {"success": False, "error": str(e)}
+
+    async def delete_adjustment(
+        self,
+        school_id: str,
+        adjustment_id: str,
+    ) -> Dict[str, Any]:
+        """Retract a pending (not yet approved) adjustment."""
+        try:
+            adj_result = await self.session.execute(
+                select(PayrollAdjustment).where(
+                    PayrollAdjustment.id == adjustment_id,
+                    PayrollAdjustment.school_id == school_id,
+                )
+            )
+            adjustment = adj_result.scalar_one_or_none()
+            if not adjustment:
+                return {"success": False, "error": "Adjustment not found"}
+
+            if adjustment.approved_by is not None:
+                return {"success": False, "error": "Cannot delete an already-approved adjustment"}
+
+            await self.session.delete(adjustment)
+            await self.session.commit()
+            return {"success": True, "message": "Adjustment deleted"}
+
+        except Exception as e:
+            logger.error(f"Error deleting payroll adjustment: {str(e)}")
+            await self.session.rollback()
+            return {"success": False, "error": str(e)}
+
     # ==================== Payroll Run Management ====================
-    
+
     async def approve_payroll_run(
         self,
         school_id: str,

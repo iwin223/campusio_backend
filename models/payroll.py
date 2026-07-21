@@ -185,8 +185,12 @@ class PayrollLineItem(SQLModel, table=True):
     other_deductions: float = Field(default=0.0)
     
     total_deductions: float
-    net_amount: float
-    
+    net_amount: float  # Final take-home: gross - total_deductions + total_adjustments, floored at 0
+
+    # Sum of APPROVED PayrollAdjustment rows for this staff member on this
+    # run. Unapproved adjustments don't affect net_amount at all.
+    total_adjustments: float = Field(default=0.0)
+
     # JSON field for detailed breakdown (flexibility for future)
     breakdown: Optional[str] = None  # JSON string with itemized breakdown
     
@@ -218,7 +222,12 @@ class PayrollAdjustment(SQLModel, table=True):
 
 
 class PayrollAdjustmentCreate(SQLModel):
-    """Validation model for creating adjustments"""
+    """Validation model for creating adjustments.
+
+    amount is signed: positive for bonus-style additions, negative for
+    penalty/advance-recovery-style deductions from net pay.
+    """
+    payroll_run_id: str
     staff_id: str
     adjustment_type: str
     amount: float

@@ -679,6 +679,7 @@ async def get_payroll_line_items(
                 "nssf_amount": li.nssf_amount,
                 "other_deductions": li.other_deductions,
                 "total_deductions": li.total_deductions,
+                "total_adjustments": li.total_adjustments,
                 "net_amount": li.net_amount
             }
             for li in line_items
@@ -753,8 +754,132 @@ async def get_payslip(
         "nssf_amount": line_item.nssf_amount,
         "other_deductions": line_item.other_deductions,
         "total_deductions": line_item.total_deductions,
+        "total_adjustments": line_item.total_adjustments,
         "net_amount": line_item.net_amount,
         "currency": "GHS",
         "generated_at": run.created_at.isoformat(),
         "posted_at": run.posted_at.isoformat() if run.posted_at else None
     }
+
+
+# ==================== Payroll Adjustments ====================
+
+@router.post("/adjustments", response_model=dict, status_code=201)
+async def create_payroll_adjustment(
+    data: PayrollAdjustmentCreate,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.HR)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Create a pending bonus/penalty adjustment against a staff member's
+    line item on a payroll run. Only allowed while the run is still
+    draft/generated. Pending until a separate approval step applies it."""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=400, detail="No school context")
+
+    service = PayrollService(session)
+    result = await service.create_adjustment(
+        school_id=school_id,
+        payroll_run_id=data.payroll_run_id,
+        staff_id=data.staff_id,
+        adjustment_type=data.adjustment_type,
+        amount=data.amount,
+        reason=data.reason,
+        created_by=current_user.id,
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+
+    return result
+
+
+@router.get("/adjustments", response_model=dict)
+async def list_payroll_adjustments(
+    payroll_run_id: Optional[str] = None,
+    staff_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """List payroll adjustments, optionally filtered by run and/or staff member."""
+    school_id = current_user.school_id
+    if not school_id and current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="No school context")
+
+    service = PayrollService(session)
+    adjustments = await service.list_adjustments(
+        school_id=school_id, payroll_run_id=payroll_run_id, staff_id=staff_id
+    )
+
+    staff_ids = [a.staff_id for a in adjustments]
+    staff_map = {}
+    if staff_ids:
+        staff_result = await session.execute(select(Staff).where(Staff.id.in_(staff_ids)))
+        for s in staff_result.scalars().all():
+            staff_map[s.id] = f"{s.first_name} {s.last_name}"
+
+    return {
+        "items": [
+            {
+                "id": a.id,
+                "payroll_run_id": a.payroll_run_id,
+                "staff_id": a.staff_id,
+                "staff_name": staff_map.get(a.staff_id, "Unknown"),
+                "adjustment_type": a.adjustment_type,
+                "amount": a.amount,
+                "reason": a.reason,
+                "created_by": a.created_by,
+                "approved_by": a.approved_by,
+                "approved_at": a.approved_at.isoformat() if a.approved_at else None,
+                "status": "approved" if a.approved_by else "pending",
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in adjustments
+        ],
+        "total": len(adjustments),
+    }
+
+
+@router.post("/adjustments/{adjustment_id}/approve", response_model=dict)
+async def approve_payroll_adjustment(
+    adjustment_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Approve a pending adjustment, immediately folding it into the
+    staff member's line item net_amount and the run's total_net.
+    Requires a step up from creation (SUPER_ADMIN/SCHOOL_ADMIN only, not
+    HR) — matches the same authority gap as run generation vs approval."""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=400, detail="No school context")
+
+    service = PayrollService(session)
+    result = await service.approve_adjustment(
+        school_id=school_id, adjustment_id=adjustment_id, approved_by=current_user.id
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+
+    return result
+
+
+@router.delete("/adjustments/{adjustment_id}", response_model=dict)
+async def delete_payroll_adjustment(
+    adjustment_id: str,
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.SCHOOL_ADMIN, UserRole.HR)),
+    session: AsyncSession = Depends(get_session)
+):
+    """Retract a pending (not yet approved) adjustment."""
+    school_id = current_user.school_id
+    if not school_id:
+        raise HTTPException(status_code=400, detail="No school context")
+
+    service = PayrollService(session)
+    result = await service.delete_adjustment(school_id=school_id, adjustment_id=adjustment_id)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+
+    return result
