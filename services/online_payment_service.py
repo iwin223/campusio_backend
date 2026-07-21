@@ -1,7 +1,7 @@
 """High-level online payment service - orchestrates payment flow"""
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_
@@ -207,6 +207,34 @@ class OnlinePaymentService:
             else:
                 payment_amount = amount_due
 
+            # Idempotency: block a duplicate MoMo prompt for this fee while an
+            # earlier one is still in flight (double-click, or the admin
+            # retrying because they didn't see a response) — otherwise the
+            # parent gets two approval prompts and, if they approve both,
+            # two separate Paystack references both succeed since each is
+            # its own idempotency key. Mirrors check_duplicate_pending_transaction
+            # used for parent-initiated checkout in routers/payments.py.
+            recent_cutoff = datetime.utcnow() - timedelta(minutes=10)
+            existing_result = await session.execute(
+                select(OnlineTransaction).where(
+                    OnlineTransaction.fee_id == fee_id,
+                    OnlineTransaction.transaction_type == TransactionType.FEE,
+                    OnlineTransaction.status.in_([TransactionStatus.PENDING, TransactionStatus.PROCESSING]),
+                    OnlineTransaction.initiated_at >= recent_cutoff,
+                ).order_by(OnlineTransaction.initiated_at.desc())
+            )
+            existing = existing_result.scalars().first()
+            if existing:
+                logger.info(f"Duplicate MoMo request blocked for fee {fee_id}, reusing transaction {existing.reference}")
+                return {
+                    "success": True,
+                    "transaction_id": str(existing.id),
+                    "reference": existing.reference,
+                    "amount": existing.amount,
+                    "message": "A payment request is already pending for this fee — waiting for the parent to approve.",
+                    "duplicate": True,
+                }
+
             # Find the student's parent for the wallet number + receipt email
             from models.student import StudentParent
             link_result = await session.execute(
@@ -297,43 +325,36 @@ class OnlinePaymentService:
             reference = data.get("reference") if isinstance(data, dict) else payload.get("reference")
             amount = data.get("amount") if isinstance(data, dict) else payload.get("amount")
             status_val = data.get("status") if isinstance(data, dict) else payload.get("status")
-            customer_email = data.get("customer", {}).get("email") if isinstance(data.get("customer"), dict) else None
-            
-            logger.info(f"Processing webhook - Reference: {reference}, Amount: {amount}, Status: {status_val}, Email: {customer_email}")
-            
+
+            logger.info(f"Processing webhook - Reference: {reference}, Amount: {amount}, Status: {status_val}")
+
             if not reference:
-                logger.warning("Webhook missing reference - attempting fallback by email and amount")
-                
-                # Fallback: match by email and amount if reference is missing
-                if customer_email and amount:
-                    amount_ghs = amount / 100  # Convert from kobo
-                    trans_result = await session.execute(
-                        select(OnlineTransaction).where(
-                            (OnlineTransaction.payer_email == customer_email) &
-                            (OnlineTransaction.amount == amount_ghs) &
-                            (OnlineTransaction.status == TransactionStatus.PENDING)
-                        ).order_by(OnlineTransaction.created_at.desc())
-                    )
-                    transaction = trans_result.scalars().first()
-                    
-                    if transaction:
-                        reference = transaction.reference
-                        logger.info(f"Matched transaction by email/amount fallback: {reference}")
-                
-                if not reference:
-                    logger.error("Could not match transaction - no reference and email/amount fallback failed")
-                    return {"success": False, "error": "Could not match payment to transaction"}
-            
-            # Find transaction
+                # No safe way to identify the transaction without a reference:
+                # OnlineTransaction doesn't store a payer email, and guessing
+                # by amount alone risks crediting the wrong parent's money to
+                # a different transaction — worse than failing cleanly on a
+                # ledger. (A previous version of this fallback referenced a
+                # payer_email column that never existed on the model, so it
+                # always raised AttributeError before reaching this point.)
+                logger.error("Webhook missing reference - cannot safely match to a transaction")
+                return {"success": False, "error": "Could not match payment to transaction"}
+
+            # Find transaction. Locked FOR UPDATE so a concurrent webhook
+            # retry (Paystack resends until it gets a 2xx) blocks here
+            # instead of racing this one to also read status != SUCCESS
+            # and double-apply the payment — same pattern as the platform
+            # subscription path's verify_and_process_payment.
             trans_result = await session.execute(
-                select(OnlineTransaction).where(OnlineTransaction.reference == reference)
+                select(OnlineTransaction)
+                .where(OnlineTransaction.reference == reference)
+                .with_for_update()
             )
             transaction = trans_result.scalar_one_or_none()
-            
+
             if not transaction:
                 logger.warning(f"Transaction not found: {reference}")
                 return {"success": False, "error": "Transaction not found"}
-            
+
             # Check if already processed (idempotency)
             if transaction.status == TransactionStatus.SUCCESS:
                 logger.info(f"Transaction already processed: {reference}")
