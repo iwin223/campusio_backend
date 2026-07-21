@@ -21,8 +21,8 @@ from models.billing import (
     BillingConfigurationResponse
 )
 from typing import Optional
-from models.payment import OnlineTransaction, TransactionStatus, PaymentVerification
-from services.platform_billing_service import PlatformBillingService
+from models.payment import OnlineTransaction, TransactionStatus, TransactionType, PaymentVerification
+from services.platform_billing_service import PlatformBillingService, mark_transaction_refunded
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,11 @@ class ReactivateSubscriptionRequest(SQLModel):
 
 class SendRemindersRequest(SQLModel):
     school_id: Optional[str] = None
+
+
+class MarkRefundedRequest(SQLModel):
+    notes: Optional[str] = None
+    amount: Optional[float] = None  # actual amount refunded, if it differs from the flagged amount
 
 
 class CreateDiscountRuleRequest(SQLModel):
@@ -1040,6 +1045,81 @@ async def get_suspended_subscriptions(
         "suspended_count": len(suspended),
         "subscriptions": suspended
     }
+
+
+# --- REFUND ENDPOINTS ---
+# Platform-subscription overpayments only (Campusio's money). School-fee
+# overpayments (parent-facing) are handled the same way under
+# /payments/refunds — see routers/payments.py.
+
+@router.get("/refunds/pending", status_code=200)
+async def get_pending_subscription_refunds(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    """
+    List platform subscription transactions flagged for refund
+    (overpayments that arrived but couldn't be applied to any
+    outstanding balance). Super admin only — this is Campusio's money.
+    """
+    if current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    result = await session.execute(
+        select(OnlineTransaction).where(
+            OnlineTransaction.transaction_type == TransactionType.SUBSCRIPTION,
+            OnlineTransaction.refund_status == "pending"
+        ).order_by(OnlineTransaction.completed_at.desc())
+    )
+    transactions = result.scalars().all()
+
+    return {
+        "count": len(transactions),
+        "total_refund_amount": round(sum(t.refund_amount or 0 for t in transactions), 2),
+        "refunds": [
+            {
+                "transaction_id": t.id,
+                "school_id": t.school_id,
+                "reference": t.reference,
+                "amount_paid": t.amount_paid,
+                "refund_amount": t.refund_amount,
+                "reason": t.failed_reason,
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            }
+            for t in transactions
+        ]
+    }
+
+
+@router.post("/refunds/{transaction_id}/mark-refunded", status_code=200)
+async def mark_subscription_refund_completed(
+    transaction_id: str,
+    body: MarkRefundedRequest = MarkRefundedRequest(),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    """
+    Mark a flagged subscription overpayment as refunded. Does not call a
+    live payment-gateway refund API — this closes out the manual refund
+    queue entry once the school has actually been paid back (e.g. bank
+    transfer), the same manual-reconciliation pattern used elsewhere in
+    this system.
+    """
+    if current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    result = await mark_transaction_refunded(
+        session=session,
+        transaction_id=transaction_id,
+        refunded_by=current_user.id,
+        notes=body.notes,
+        amount=body.amount,
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("error"))
+
+    return result
 
 
 # --- REMINDER ENDPOINTS ---

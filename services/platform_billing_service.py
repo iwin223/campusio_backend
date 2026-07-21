@@ -47,6 +47,48 @@ def subscription_outstanding(subscription: PlatformSubscription) -> float:
     return round(grand_total - subscription.amount_paid, 2)
 
 
+async def mark_transaction_refunded(
+    session: AsyncSession,
+    transaction_id: str,
+    refunded_by: str,
+    notes: Optional[str] = None,
+    amount: Optional[float] = None,
+) -> Dict:
+    """Mark a flagged-for-refund transaction as actually refunded.
+
+    Works for both FEE and SUBSCRIPTION transactions — refund tracking
+    lives on OnlineTransaction regardless of type. No live Paystack refund
+    API call is made; this just closes out the manual refund queue entry,
+    same manual-reconciliation pattern as bank reconciliation elsewhere.
+    """
+    result = await session.execute(
+        select(OnlineTransaction).where(OnlineTransaction.id == transaction_id)
+    )
+    transaction = result.scalar_one_or_none()
+
+    if not transaction:
+        return {"success": False, "error": "Transaction not found"}
+
+    if transaction.refund_status != "pending":
+        return {"success": False, "error": f"No pending refund on this transaction (status: {transaction.refund_status})"}
+
+    transaction.refund_status = "completed"
+    transaction.refunded_at = datetime.utcnow()
+    transaction.refunded_by = refunded_by
+    transaction.refund_notes = notes
+    if amount is not None:
+        transaction.refund_amount = round(amount, 2)
+    transaction.updated_at = datetime.utcnow()
+    await session.commit()
+
+    return {
+        "success": True,
+        "transaction_id": transaction.id,
+        "refund_amount": transaction.refund_amount,
+        "message": "Refund marked as completed",
+    }
+
+
 class PlatformBillingService:
     """Manages school platform subscription billing"""
     
@@ -444,6 +486,8 @@ class PlatformBillingService:
                     f"already-settled subscription {subscription.id} — needs refund"
                 )
                 transaction.failed_reason = "Overpayment: subscription already settled, refund required"
+                transaction.refund_status = "pending"
+                transaction.refund_amount = round(amount_paid, 2)
                 await session.commit()
                 return {
                     "success": True,
@@ -468,6 +512,8 @@ class PlatformBillingService:
                 transaction.failed_reason = (
                     f"Overpayment: GHS {round(amount_paid - amount_applied, 2)} excess, refund required"
                 )
+                transaction.refund_status = "pending"
+                transaction.refund_amount = round(amount_paid - amount_applied, 2)
 
             # Note: no GL journal entry is written here. Platform fees are
             # Campusio revenue, not the school's — the subscription, invoice,

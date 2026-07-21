@@ -68,7 +68,19 @@ class OnlineTransaction(SQLModel, table=True):
     # Reconciliation
     verified_at: Optional[datetime] = None
     journal_entry_id: Optional[str] = None  # Link to GL entry created
-    
+
+    # Refunds — set when a SUCCESS transaction paid more than was owed (two
+    # checkout links, a student with no more outstanding fees, etc). Money
+    # genuinely arrived so the transaction stays SUCCESS; this just tracks
+    # that the excess is owed back. No live Paystack refund API call is
+    # made — this is a manual queue an admin works off, same as bank
+    # reconciliation elsewhere in this system.
+    refund_status: Optional[str] = None  # None, "pending", "completed"
+    refund_amount: Optional[float] = None
+    refunded_at: Optional[datetime] = None
+    refunded_by: Optional[str] = None  # User.id who marked it refunded
+    refund_notes: Optional[str] = None
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

@@ -12,7 +12,7 @@ import os
 
 from database import get_session
 from auth import get_current_user
-from models.payment import OnlineTransaction, TransactionStatus
+from models.payment import OnlineTransaction, TransactionStatus, TransactionType
 from models.user import User, UserRole
 from models.fee import Fee
 from models.student import Student, Parent, StudentParent
@@ -764,6 +764,94 @@ async def list_transactions(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error retrieving transactions"
         )
+
+
+class MarkRefundedRequest(BaseModel):
+    notes: Optional[str] = None
+    amount: Optional[float] = None  # actual amount refunded, if it differs from the flagged amount
+
+
+@router.get("/refunds/pending", status_code=200)
+async def get_pending_fee_refunds(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    """
+    List school-fee transactions flagged for refund (a parent's payment
+    arrived but the student had no more outstanding fees to apply it to).
+
+    **Auth Required:** School Admin or Accountant
+    """
+    if current_user.role not in [UserRole.SCHOOL_ADMIN, UserRole.ACCOUNTANT]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+    result = await session.execute(
+        select(OnlineTransaction).where(
+            OnlineTransaction.school_id == current_user.school_id,
+            OnlineTransaction.transaction_type == TransactionType.FEE,
+            OnlineTransaction.refund_status == "pending"
+        ).order_by(OnlineTransaction.completed_at.desc())
+    )
+    transactions = result.scalars().all()
+
+    return {
+        "count": len(transactions),
+        "total_refund_amount": round(sum(t.refund_amount or 0 for t in transactions), 2),
+        "refunds": [
+            {
+                "transaction_id": t.id,
+                "student_id": t.student_id,
+                "parent_id": t.parent_id,
+                "reference": t.reference,
+                "amount_paid": t.amount_paid,
+                "refund_amount": t.refund_amount,
+                "reason": t.failed_reason,
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            }
+            for t in transactions
+        ]
+    }
+
+
+@router.post("/{transaction_id}/mark-refunded", status_code=200)
+async def mark_fee_refund_completed(
+    transaction_id: str,
+    body: MarkRefundedRequest = MarkRefundedRequest(),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    """
+    Mark a flagged fee overpayment as refunded to the parent. Does not
+    call a live payment-gateway refund API — closes out the manual
+    refund queue entry once the parent has actually been paid back.
+
+    **Auth Required:** School Admin or Accountant
+    """
+    if current_user.role not in [UserRole.SCHOOL_ADMIN, UserRole.ACCOUNTANT]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+    txn_result = await session.execute(
+        select(OnlineTransaction).where(
+            OnlineTransaction.id == transaction_id,
+            OnlineTransaction.school_id == current_user.school_id
+        )
+    )
+    if not txn_result.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+
+    from services.platform_billing_service import mark_transaction_refunded
+    result = await mark_transaction_refunded(
+        session=session,
+        transaction_id=transaction_id,
+        refunded_by=current_user.id,
+        notes=body.notes,
+        amount=body.amount,
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("error"))
+
+    return result
 
 
 @router.post("/{transaction_id}/verify", status_code=200)

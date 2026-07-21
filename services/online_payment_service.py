@@ -400,12 +400,19 @@ class OnlinePaymentService:
                 # Flush to ensure all FeePayments have IDs
                 await session.flush()
                 
-                # Log distribution result
+                # Flag any undistributed excess for refund rather than
+                # silently absorbing it — this money genuinely arrived but
+                # the student has no outstanding fee left to apply it to.
                 if remaining_amount > 0:
                     logger.warning(
-                        f"Payment distribution: GHS {remaining_amount:.2f} could not be "
-                        f"distributed (student has no more outstanding fees)"
+                        f"OVERPAYMENT: {reference} — GHS {remaining_amount:.2f} could not be "
+                        f"distributed (student has no more outstanding fees), refund required"
                     )
+                    transaction.failed_reason = (
+                        f"Overpayment: GHS {remaining_amount:.2f} excess, refund required"
+                    )
+                    transaction.refund_status = "pending"
+                    transaction.refund_amount = round(remaining_amount, 2)
                 
                 # Update transaction with first fee payment ID (for reference)
                 if fee_payments:
