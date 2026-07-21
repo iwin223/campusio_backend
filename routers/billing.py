@@ -1080,12 +1080,11 @@ async def send_pending_reminders(
     from services.payment_reminder_service import PaymentReminderService
     
     service = PaymentReminderService()
-    result = await service.check_and_send_reminders(
+    result = await service.send_pending_reminders(
         session=session,
-        school_id=school_id,
-        reminder_type="email"
+        school_id=school_id
     )
-    
+
     return result
 
 
@@ -1114,16 +1113,16 @@ async def get_reminder_history(
     from services.payment_reminder_service import PaymentReminderService
     
     service = PaymentReminderService()
-    reminders = await service.get_reminder_history(
+    result = await service.get_reminder_history(
         session=session,
         subscription_id=subscription_id,
         limit=limit
     )
-    
+
     return {
         "subscription_id": subscription_id,
-        "reminder_count": len(reminders),
-        "reminders": reminders
+        "reminder_count": result.get("count", 0),
+        "reminders": result.get("data", [])
     }
 
 
