@@ -349,7 +349,32 @@ class PlatformBillingService:
                 payment_amount = amount_to_pay
             else:
                 payment_amount = amount_due
-            
+
+            # Idempotency: a double-click on "Pay Now", or a retry after a
+            # slow response, must not spin up a second Paystack checkout
+            # session for the same subscription — same guard as
+            # check_duplicate_pending_transaction for school-fee checkout.
+            existing_result = await session.execute(
+                select(OnlineTransaction).where(
+                    OnlineTransaction.fee_id == subscription_id,
+                    OnlineTransaction.transaction_type == TransactionType.SUBSCRIPTION,
+                    OnlineTransaction.status == TransactionStatus.PENDING,
+                    OnlineTransaction.amount >= payment_amount - 0.01,
+                    OnlineTransaction.amount <= payment_amount + 0.01,
+                ).order_by(OnlineTransaction.initiated_at.desc())
+            )
+            existing = existing_result.scalars().first()
+            if existing:
+                logger.info(f"Duplicate subscription payment init blocked for {subscription_id}, reusing {existing.reference}")
+                return {
+                    "success": True,
+                    "transaction_id": existing.id,
+                    "payment_url": existing.payment_url,
+                    "reference": existing.reference,
+                    "amount": existing.amount,
+                    "duplicate": True,
+                }
+
             # Create transaction record
             transaction_id = f"PLAT-{uuid.uuid4().hex[:12].upper()}"
             
