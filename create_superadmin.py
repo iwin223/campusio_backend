@@ -3,7 +3,7 @@ One-time script to create the initial super admin account on a fresh system.
 
 Usage:
   python create_superadmin.py
-  python create_superadmin.py --email admin@campusio.com --password MySecret123
+  python create_superadmin.py --email admin@termly.com --password MySecret123
 
 The account is created with must_change_password=False (you're setting it up yourself).
 Run this once per deployment. If the email already exists it will exit safely.
@@ -62,8 +62,8 @@ async def create_superadmin(email: str, password: str, first_name: str, last_nam
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Create the initial Campusio super admin account")
-    parser.add_argument("--email",      default="superadmin@campusio.com", help="Email address")
+    parser = argparse.ArgumentParser(description="Create the initial Termly super admin account")
+    parser.add_argument("--email",      default="superadmin@termly.com", help="Email address")
     parser.add_argument("--password",   default="ChangeMe123!", help="Initial password")
     parser.add_argument("--first-name", default="Super",  dest="first_name")
     parser.add_argument("--last-name",  default="Admin",  dest="last_name")

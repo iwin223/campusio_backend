@@ -1048,7 +1048,7 @@ async def get_suspended_subscriptions(
 
 
 # --- REFUND ENDPOINTS ---
-# Platform-subscription overpayments only (Campusio's money). School-fee
+# Platform-subscription overpayments only (Termly's money). School-fee
 # overpayments (parent-facing) are handled the same way under
 # /payments/refunds — see routers/payments.py.
 
@@ -1060,7 +1060,7 @@ async def get_pending_subscription_refunds(
     """
     List platform subscription transactions flagged for refund
     (overpayments that arrived but couldn't be applied to any
-    outstanding balance). Super admin only — this is Campusio's money.
+    outstanding balance). Super admin only — this is Termly's money.
     """
     if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")

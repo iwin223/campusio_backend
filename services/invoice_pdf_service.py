@@ -233,7 +233,7 @@ class InvoicePDFService:
             <!-- Footer -->
             <div class="footer">
                 <p><strong>School ERP Platform</strong></p>
-                <p>For payment inquiries: info@campusio.online | +233 53 448 4781</p>
+                <p>For payment inquiries: info@termly.online | +233 53 448 4781</p>
                 <p>Generated on {{ generated_date }}</p>
             </div>
         </div>

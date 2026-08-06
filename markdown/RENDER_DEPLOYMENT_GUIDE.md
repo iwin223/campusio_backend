@@ -400,7 +400,7 @@ live inside Render. For an offsite copy, run from anywhere with network
 access to the database:
 
 ```bash
-pg_dump "$DATABASE_URL" --format=custom --file="campusio_$(date +%Y%m%d).dump"
+pg_dump "$DATABASE_URL" --format=custom --file="termly_$(date +%Y%m%d).dump"
 ```
 
 This produces a single portable file restorable with `pg_restore`. Where you

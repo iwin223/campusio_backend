@@ -177,7 +177,7 @@ async def get_current_user(
                 if reason[-1] not in ".!?":
                     reason += "."
                 detail += f" {reason}"
-            detail += " Contact your school administrator or Campusio support to resolve this."
+            detail += " Contact your school administrator or Termly support to resolve this."
             raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=detail)
 
     return user

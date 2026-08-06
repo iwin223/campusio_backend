@@ -253,7 +253,7 @@ class OnlinePaymentService:
             momo_phone = (phone or parent_record.phone or "").strip()
             if not momo_phone:
                 return {"success": False, "error": "No phone number on record — enter one to send the prompt to"}
-            parent_email = parent_record.email or f"parent-{parent_record.id}@campusio.online"
+            parent_email = parent_record.email or f"parent-{parent_record.id}@termly.online"
 
             transaction_id = f"TXN-{uuid.uuid4().hex[:12].upper()}"
             transaction = OnlineTransaction(

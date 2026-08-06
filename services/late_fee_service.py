@@ -2,7 +2,7 @@
 
 Late fees live in the platform ledger only (PlatformSubscription +
 LateFeeCharge). No school-GL entries are written here — platform fees are
-Campusio's receivable, not the school's revenue, and the collectible total
+Termly's receivable, not the school's revenue, and the collectible total
 is computed as total_amount_due + late_fee_amount - discount_amount by
 services/platform_billing_service.py::subscription_outstanding().
 """

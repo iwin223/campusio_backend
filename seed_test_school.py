@@ -15,7 +15,7 @@ Usage:
     python seed_test_school.py
 
 Environment:
-    DATABASE_URL  (default: postgresql+asyncpg://campusio:campusio123@localhost:5432/campusio_db)
+    DATABASE_URL  (default: postgresql+asyncpg://termly:termly123@localhost:5432/termly_db)
 """
 import asyncio
 import json
@@ -53,7 +53,7 @@ from models.security import StudentSecurityProfile
 # ---------------------------------------------------------------------------
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql+asyncpg://campusio:campusio123@localhost:5432/campusio_db",
+    "postgresql+asyncpg://termly:termly123@localhost:5432/termly_db",
 )
 
 # Normalise URL scheme

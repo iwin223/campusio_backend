@@ -10,7 +10,7 @@ Ledger rules this module enforces:
   until acknowledged) or a concurrent manual verify never applies the same
   money twice. The OnlineTransaction row is the idempotency key, locked
   FOR UPDATE while applying.
-- No writes to the school's GL: platform fees are Campusio revenue, not
+- No writes to the school's GL: platform fees are Termly revenue, not
   school revenue — the subscription/invoice/transaction tables ARE the
   platform ledger.
 """
@@ -541,7 +541,7 @@ class PlatformBillingService:
                 transaction.refund_amount = round(amount_paid - amount_applied, 2)
 
             # Note: no GL journal entry is written here. Platform fees are
-            # Campusio revenue, not the school's — the subscription, invoice,
+            # Termly revenue, not the school's — the subscription, invoice,
             # and transaction rows are the platform ledger.
 
             # Update invoice status
